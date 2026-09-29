@@ -177,7 +177,6 @@ int main(void) {
     assert(posts == before_change);
     process();
     assert(strcmp(objects[2].text, "UNKNOWN / FAULT") == 0);
-    assert(objects[6].state & LV_STATE_DISABLED); /* DRAIN waits for new config observation. */
     emit(next_id, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
     process();
     valve_ui_touch(100, 180, true, false, fake_now);
@@ -193,5 +192,28 @@ int main(void) {
     process();
     assert(strcmp(objects[2].text, "UNKNOWN / FAULT") == 0);
     assert(objects[4].state & LV_STATE_DISABLED);
+    /* Every new configuration can DRAIN despite fault, malformed status, or timeout.
+     * The client represents FAULT/SAFE_DRAIN and malformed payloads as INVALID. */
+    const valve_client_result_t failures[] = {VALVE_CLIENT_INVALID, VALVE_CLIENT_TIMEOUT};
+    for (unsigned i = 0; i < sizeof failures / sizeof failures[0]; ++i) {
+        valve_ui_touch(100, 270, true, false, fake_now);
+        int before = posts;
+        config_generation += 2;
+        process();
+        valve_ui_touch(100, 270, false, false, fake_now);
+        assert(posts == before); /* old-generation contact cannot act */
+        emit(next_id, session, VALVE_CLIENT_EVENT_GET, failures[i], VALVE_UNKNOWN);
+        process();
+        assert(strcmp(objects[2].text, "UNKNOWN / FAULT") == 0);
+        assert(objects[4].state & LV_STATE_DISABLED);
+        assert(!(objects[6].state & LV_STATE_DISABLED));
+        valve_ui_touch(100, 180, true, false, fake_now);
+        fake_now += 2000; valve_ui_touch(100, 180, true, false, fake_now);
+        valve_ui_touch(100, 180, false, false, fake_now);
+        assert(posts == before); /* unknown status never authorizes SUPPLY */
+        valve_ui_touch(100, 270, true, false, fake_now);
+        valve_ui_touch(100, 270, false, false, fake_now);
+        assert(posts == before + 1); /* new deliberate DRAIN does not need normal status */
+    }
     puts("valve UI sequence tests passed");
 }
