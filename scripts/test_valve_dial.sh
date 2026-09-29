@@ -34,11 +34,14 @@ cc -std=c11 -Wall -Wextra -Werror -DVALVE_CLIENT_HOST_TEST -Iidf_app/main \
 cc -std=c11 -Wall -Wextra -Werror -Itests/valve_dial/fakes -Iidf_app/main -Icommon \
     tests/valve_dial/test_valve_ui_sequence.c idf_app/main/valve_ui_dial.c \
     idf_app/main/valve_logic.c -o "$tmp_dir/test_valve_ui_sequence"
-cc -std=c11 -Wall -Wextra -Werror -DVALVE_CLIENT_HOST_TEST \
-    -Itests/valve_dial/fakes -Iidf_app/main -Icommon \
+cc -std=c11 -Wall -Wextra -Werror -Wno-unused-function -DVALVE_CLIENT_HOST_TEST \
+    -ffunction-sections -fdata-sections \
+    -Itests/valve_dial/fakes -Iidf_app/main -Icommon -Iinclude \
     tests/valve_dial/test_valve_integration.c idf_app/main/valve_ui_dial.c \
     idf_app/main/valve_client_dial.c idf_app/main/valve_logic.c \
-    common/bridge_command_plan.c -o "$tmp_dir/test_valve_integration"
+    common/bridge_command_plan.c common/bridge_client.c common/controller_input.c \
+    common/controller_action_router.c idf_app/main/controller_input_profile_dial.c \
+    -Wl,--gc-sections -o "$tmp_dir/test_valve_integration"
 "$tmp_dir/test_valve_integration" > "$tmp_dir/integration.log" 2>&1
 ! grep -q 'integration-private-token' "$tmp_dir/integration.log"
 cat "$tmp_dir/integration.log"
@@ -54,6 +57,9 @@ assert 'data->state = LV_INDEV_STATE_RELEASED' in press
 release = touch[touch.index('valve_gesture_t gesture = valve_gesture_classify', touch.index('/* Use the last real touch coordinate')):]
 assert release.index('gesture == VALVE_GESTURE_SWITCH_SCREEN') < release.index('valve_ui_touch(valve_touch_coordinate(s_touch_last_x, s_current_rotation)')
 assert 'lv_indev_reset(indev, NULL)' in release[:release.index('valve_ui_touch(valve_touch_coordinate(s_touch_last_x, s_current_rotation)')]
+pending = touch[touch.index('void platform_display_process_pending(void) {'):]
+assert 'if (s_pending_page_switch)' in pending
+assert pending.index('s_pending_page_switch = false;') < pending.index('valve_ui_toggle_page();')
 assert 'LV_EVENT_CLICKED' not in ui
 assert 'data->state = s_touch_consumed ? LV_INDEV_STATE_RELEASED : LV_INDEV_STATE_PRESSED' in touch
 encoder = Path('idf_app/main/platform_input_idf.c').read_text()

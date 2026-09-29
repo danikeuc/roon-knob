@@ -2,6 +2,13 @@
 #include "valve_client_dial.h"
 #include "valve_config_dial.h"
 #include "bridge_command_plan.h"
+#include "controller_input.h"
+#include "controller_action_router.h"
+#include "controller_config.h"
+#include "platform/platform_http.h"
+#include "platform/platform_task.h"
+#include "platform/platform_log.h"
+#include "controller_presentation.h"
 #include "lvgl.h"
 #include "freertos/queue.h"
 #include "freertos/FreeRTOS.h"
@@ -63,7 +70,6 @@ void ui_set_valve_active(bool active) { valve_indicator = active; }
 static const char *const secret = "integration-private-token";
 static unsigned start_posts, drain_posts, bridge_posts;
 static bool pi_online = true, bridge_playing;
-static float bridge_volume = -20.0f;
 static uint32_t pi_deadline_ms;
 static char request_trace[128];
 bool valve_config_load(char *url, size_t ul, char *token, size_t tl) {
@@ -106,20 +112,50 @@ static int fake_pi_transport(const char *method, const char *url, const char *to
     }
     return 0;
 }
-static void fake_bridge(const controller_command_t *command) {
-    bridge_command_context_t context = {.operational = true, .zone_id = "roon:living",
-        .volume = bridge_volume, .volume_min = -80, .volume_max = 6, .volume_step = 0.5f};
-    bridge_command_plan_t plan;
-    assert(bridge_command_plan_build(command, &context, &plan) && plan.accepted);
-    assert(strstr(plan.json, "\"zone_id\":\"roon:living\"") != NULL);
+bool controller_config_snapshot(controller_config_snapshot_t *out) {
+    assert(out);
+    memset(out, 0, sizeof *out);
+    strcpy(out->value.bridge_base, "http://fake-bridge:8088");
+    strcpy(out->value.zone_id, "roon:living");
+    return true;
+}
+int platform_http_post_json(const char *url, const char *json, char **out, size_t *out_len) {
+    assert(strcmp(url, "http://fake-bridge:8088/control") == 0);
+    assert(strstr(json, "\"zone_id\":\"roon:living\"") != NULL);
+    assert(strstr(url, secret) == NULL && strstr(json, secret) == NULL);
+    if (strstr(json, "\"action\":\"play_pause\"")) bridge_playing = !bridge_playing;
+    else assert(strstr(json, "\"action\":\"next\"") != NULL);
     bridge_posts++;
-    if (command->kind == CONTROLLER_COMMAND_TOGGLE_PLAYBACK) {
-        assert(strstr(plan.json, "\"action\":\"play_pause\"") != NULL);
-        bridge_playing = !bridge_playing;
-    } else if (command->kind == CONTROLLER_COMMAND_ADJUST_VOLUME_STEPS) {
-        assert(strstr(plan.json, "\"action\":\"vol_abs\"") != NULL);
-        bridge_volume = plan.predicted_volume;
-    } else assert(false);
+    *out = NULL; *out_len = 0;
+    return 0;
+}
+void platform_http_free(char *ptr) { free(ptr); }
+void platform_log_backend(const char *level, const char *fmt, va_list args) {
+    (void)level; vfprintf(stderr, fmt, args); fputc('\n', stderr);
+}
+bool platform_task_post_to_ui(platform_task_fn_t fn, void *arg) {
+    (void)fn; (void)arg; return false;
+}
+void controller_presentation_zone_picker_scroll(int delta) { (void)delta; }
+void controller_presentation_show_settings(void) {}
+void controller_presentation_show_volume_change(float volume, float step) {
+    (void)volume; (void)step;
+}
+void controller_presentation_hide_zone_picker(void) {}
+void controller_presentation_zone_picker_get_selected_id(char *out, size_t len) {
+    if (len) out[0] = 0;
+}
+bool controller_presentation_zone_picker_is_current_selection(void) { return false; }
+void controller_presentation_set_network_status(const char *status) { (void)status; }
+void controller_presentation_set_zone_name(const char *name) { (void)name; }
+void controller_presentation_set_message(const char *msg) { (void)msg; }
+void controller_presentation_show_zone_picker(const char **names, const char **ids,
+                                               int count, int selected) {
+    (void)names; (void)ids; (void)count; (void)selected;
+}
+controller_config_write_result_t controller_config_set_zone(
+    const char *id, controller_config_snapshot_t *out) {
+    (void)id; (void)out; return CONTROLLER_CONFIG_NOT_COMMITTED;
 }
 static void flush(void) {
     valve_client_test_run_pending();
@@ -134,13 +170,6 @@ int main(void) {
     flush();
     assert(strcmp(objects[2].text, "DRAIN (0)") == 0);
     assert(posts == 0 && gets >= 1);
-    controller_command_t toggle = controller_command_make(CONTROLLER_COMMAND_TOGGLE_PLAYBACK);
-    fake_bridge(&toggle);
-    assert(bridge_playing);
-    controller_command_t volume = controller_command_adjust_volume(2);
-    fake_bridge(&volume);
-    assert(bridge_volume == -19.0f && bridge_posts == 2);
-
     valve_gesture_context_t media = {0};
     assert(valve_gesture_classify(80, 4, 250, 0, media) == VALVE_GESTURE_SWITCH_SCREEN);
     assert(valve_gesture_classify(4, -80, 250, 0, media) == VALVE_GESTURE_ART_UP);
@@ -165,7 +194,7 @@ int main(void) {
     assert(strcmp(objects[3].text, "10:00 remaining") == 0);
     fake_now += 30000; valve_ui_wake(); flush();
     assert(strcmp(objects[3].text, "9:30 remaining") == 0);
-    assert(bridge_posts == 2 && bridge_playing);
+    assert(bridge_posts == 0 && !bridge_playing);
 
     valve_ui_touch(100, 180, false, false, fake_now);
     valve_ui_touch(100, 270, true, false, fake_now);
@@ -186,8 +215,30 @@ int main(void) {
     fake_now += 2100; pi_online = true;
     valve_client_on_reconnect(); valve_ui_connected(true); flush();
     assert(start_posts == 1 && strcmp(objects[2].text, "DRAIN (0)") == 0);
-    assert(bridge_posts == 2);
+    assert(bridge_posts == 0);
     assert(strstr(request_trace, secret) == NULL);
-    puts("mock Pi + bridge integration session passed (Roon plan, swipe, hold, 600s, DRAIN, reconnect, no replay, token redaction)");
+    assert(valve_ui_visible());
+    assert(valve_gesture_classify(85, 2, 200, 0, (valve_gesture_context_t){0}) ==
+           VALVE_GESTURE_SWITCH_SCREEN);
+    valve_ui_toggle_page();
+    assert(!valve_ui_visible());
+    controller_action_router_init();
+    controller_input_set_action_handler(controller_action_router_handle);
+    controller_physical_event_t encoder = {
+        .source_id = CONTROLLER_INPUT_SOURCE_DIAL_BUILTIN,
+        .control_id = CONTROLLER_INPUT_CONTROL_DIAL_ROTATION,
+        .kind = CONTROLLER_PHYSICAL_EVENT_ROTATION,
+        .gesture = CONTROLLER_PHYSICAL_GESTURE_NONE,
+        .value = 1,
+    };
+    /* The fake bridge has not published an operational volume state. */
+    assert(!controller_input_dispatch_physical(&encoder));
+    assert(bridge_posts == 0);
+    assert(controller_input_dispatch_control(CONTROLLER_CONTROL_INTENT_ACTIVATE));
+    assert(bridge_posts == 1 && bridge_playing);
+    assert(controller_input_dispatch_control(CONTROLLER_CONTROL_INTENT_NEXT));
+    assert(bridge_posts == 2);
+    assert(strcmp(objects[2].text, "DRAIN (0)") == 0);
+    puts("mock Pi + bridge integration session passed (Roon input/router/client, page switch, hold, 600s, DRAIN, reconnect, no replay, token redaction)");
     return 0;
 }

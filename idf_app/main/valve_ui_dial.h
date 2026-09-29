@@ -5,6 +5,8 @@
 #include <stdint.h>
 void valve_ui_init(void);
 void valve_ui_show(bool visible);
+/* Apply a deferred horizontal page-switch gesture. */
+void valve_ui_toggle_page(void);
 bool valve_ui_visible(void);
 void valve_ui_set_status(const valve_status_t *status);
 void valve_ui_set_unknown(const char *reason);

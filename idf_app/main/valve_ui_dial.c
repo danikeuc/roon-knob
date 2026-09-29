@@ -143,6 +143,7 @@ void valve_ui_show(bool visible) {
         request_get(monotonic_ms());
     } else lv_obj_add_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
 }
+void valve_ui_toggle_page(void) { valve_ui_show(!valve_ui_visible()); }
 bool valve_ui_visible(void) { return s_visible; }
 void valve_ui_set_status(const valve_status_t *status) {
     if (!status) return;

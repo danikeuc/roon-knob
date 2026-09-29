@@ -635,7 +635,7 @@ bool platform_display_is_sleeping(void) {
 void platform_display_process_pending(void) {
     if (s_pending_page_switch) {
         s_pending_page_switch = false;
-        valve_ui_show(!valve_ui_visible());
+        valve_ui_toggle_page();
         s_last_tap_time = 0;
     }
     // Process deferred swipe gesture art mode
