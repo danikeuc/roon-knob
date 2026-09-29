@@ -1,0 +1,80 @@
+#include "valve_logic.h"
+#include "valve_client_dial.h"
+#include "valve_config_dial.h"
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+
+static const char *ready = "{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"ready\",\"remaining_seconds\":0}";
+static const char *active = "{\"mode\":\"manual_timed\",\"state\":\"TIMED_SHOWER\",\"command\":\"SUPPLY\",\"reason\":\"timed\",\"remaining_seconds\":600}";
+static void parse_cases(void) {
+    valve_status_t s;
+    assert(valve_status_parse(ready, strlen(ready), &s) && s.state == VALVE_DRAIN && s.remaining_seconds == 0);
+    assert(valve_status_parse(active, strlen(active), &s) && s.state == VALVE_SUPPLY && s.remaining_seconds == 600);
+    const char *bad[] = {
+        "{}", "{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"SUPPLY\",\"reason\":\"x\",\"remaining_seconds\":0}",
+        "{\"mode\":\"auto\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"x\",\"remaining_seconds\":0}",
+        "{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"x\",\"remaining_seconds\":1}",
+        "{\"mode\":\"manual_timed\",\"state\":\"TIMED_SHOWER\",\"command\":\"SUPPLY\",\"reason\":\"x\",\"remaining_seconds\":-1}",
+        "{\"mode\":\"manual_timed\",\"state\":\"TIMED_SHOWER\",\"command\":\"SUPPLY\",\"reason\":\"x\",\"remaining_seconds\":601}",
+        "{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"x\"}",
+        "{\"mode\":\"manual_timed\",\"state\":\"FAULT\",\"command\":\"DRAIN\",\"reason\":\"x\",\"remaining_seconds\":0}",
+        "{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"x\",\"remaining_seconds\":0",
+        "{\"mode\":\"manual_timed\",\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"x\",\"remaining_seconds\":0}",
+        "{\"mode\":\"manual_timed\" \"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"x\",\"remaining_seconds\":0}",
+    };
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        assert(!valve_status_parse(bad[i], strlen(bad[i]), &s));
+        assert(s.state == VALVE_UNKNOWN);
+    }
+    char huge[2050]; memset(huge, ' ', sizeof huge); memcpy(huge, ready, strlen(ready));
+    assert(!valve_status_parse(huge, sizeof huge, &s));
+}
+
+bool valve_config_load(char *url, size_t ul, char *token, size_t tl) {
+    assert(ul >= 32 && tl >= 32);
+    strcpy(url, "http://192.0.2.10:8081"); strcpy(token, "private-test-token"); return true;
+}
+static int next_status = 200, posts, gets, fail_transport;
+static char trace[256];
+static int mock_transport(const char *method, const char *url, const char *token,
+                          int *status, char *body, size_t cap, size_t *len, void *ctx) {
+    (void)ctx; assert(strcmp(token, "private-test-token") == 0);
+    assert(strstr(url, token) == NULL && strstr(url, "?") == NULL);
+    assert(cap == 2048);
+    if (strcmp(method, "POST") == 0) {
+        posts++;
+        assert(strcmp(url, posts == 1 ? "http://192.0.2.10:8081/api/v1/display/actions/timed-shower"
+                                      : "http://192.0.2.10:8081/api/v1/display/actions/drain") == 0);
+        strcat(trace, "P");
+    } else { gets++; assert(strcmp(method, "GET") == 0);
+        assert(strcmp(url, "http://192.0.2.10:8081/api/v1/display/status") == 0); strcat(trace, "G"); }
+    if (fail_transport) return -3;
+    *status = next_status;
+    const char *payload = strcmp(method, "POST") == 0 ? "{}" : ready;
+    *len = strlen(payload); memcpy(body, payload, *len);
+    return 0;
+}
+static void request_cases(void) {
+    valve_status_t s;
+    valve_client_test_transport(mock_transport, NULL);
+    assert(valve_client_get_status(&s) == VALVE_CLIENT_OK && s.state == VALVE_DRAIN);
+    next_status = 401; assert(valve_client_get_status(&s) == VALVE_CLIENT_UNAUTHORIZED && s.state == VALVE_UNKNOWN);
+    next_status = 409; assert(valve_client_get_status(&s) == VALVE_CLIENT_CONFLICT);
+    next_status = 500; assert(valve_client_get_status(&s) == VALVE_CLIENT_SERVER_ERROR);
+    next_status = 200; fail_transport = 1;
+    assert(valve_client_get_status(&s) == VALVE_CLIENT_TIMEOUT && s.state == VALVE_UNKNOWN);
+    fail_transport = 0;
+    posts = gets = 0; trace[0] = 0;
+    assert(valve_client_post(VALVE_ACTION_START_600S, &s) == VALVE_CLIENT_OK);
+    assert(posts == 1 && gets == 1 && strcmp(trace, "PG") == 0);
+    valve_client_on_reconnect(); valve_client_test_run_pending();
+    assert(posts == 1 && gets == 2 && strcmp(trace, "PGG") == 0);
+    fail_transport = 1;
+    assert(valve_client_post(VALVE_ACTION_DRAIN, &s) == VALVE_CLIENT_TIMEOUT);
+    assert(s.state == VALVE_UNKNOWN);
+    fail_transport = 0; valve_client_test_run_pending();
+    assert(posts == 2 && gets == 3 && strcmp(trace, "PGGPG") == 0);
+    assert(valve_client_post((valve_action_t)99, &s) == VALVE_CLIENT_INVALID && posts == 2);
+}
+int main(void) { parse_cases(); request_cases(); puts("valve parser/client tests passed"); }

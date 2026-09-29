@@ -3,6 +3,8 @@ set(SRC_FILES
     "captive_portal.c"
     "config_server.c"
     "valve_config_dial.c"
+    "valve_logic.c"
+    "valve_client_dial.c"
     "http_server_lifecycle.c"
     "dns_server.c"
     "ui_network.c"

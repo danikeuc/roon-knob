@@ -27,3 +27,7 @@ storage = Path('idf_app/main/valve_config_dial.c').read_text()
 assert 'nvs_set_str(' not in storage
 assert 'nvs_set_blob(' in storage
 PY
+cc -std=c11 -Wall -Wextra -Werror -DVALVE_CLIENT_HOST_TEST -Iidf_app/main \
+    tests/valve_dial/test_valve_logic.c idf_app/main/valve_logic.c \
+    idf_app/main/valve_client_dial.c -o "$tmp_dir/test_valve_logic"
+"$tmp_dir/test_valve_logic"
