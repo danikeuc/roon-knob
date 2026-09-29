@@ -2,9 +2,11 @@
 
 ## Source and host gate
 
-The Pi manual timed controller source was verified at commit `5ae3c3ea53feae37147b72782308770605113fde`. The firmware artifact must be identified by the final commit from `git rev-parse HEAD` on branch `codex/roon-valve-dial`, plus the binary hash and ESP-IDF 5.5.5 build log. The ignored `.superpowers/sdd/2026-09-29-waveshare-dial-roon-valves/task-4-report.md` records the final firmware SHA from this implementation. A later edit or rebuild creates a different artifact and needs a new record.
+The source artifact compiled and host tested for Task 4 is firmware commit `8d7f4b112f1f2510cdcb226293f151d69e81fa48` on `codex/roon-valve-dial`. ESP-IDF 5.5.5 built the ESP32-S3 image `idf_app/build/hiphi_dial.bin` at size `0x1fb0e0` (smallest app partition `0x280000`) with SHA-256 `6d2a8c9fdb3ccd81ffca3da43101b78c8f66eededcd554664c12cd6990e41d71`. The Pi source is `5ae3c3ea53feae37147b72782308770605113fde`; the bridge compose example is `2c119689e22e988f343226d49c0b2dc195707437`. This documentation and integration-test follow-up commit is later than the compiled firmware source commit. Its source changes are limited to tests and documentation. The image is unflashed; physical verification remains open.
 
-Run `PATH=/tmp/knob-bin:$PATH ./scripts/test_valve_dial.sh`, `bash /tmp/knob-idf-build.sh`, and `git diff --check`. A green host suite and ESP32-S3 build establish source and compilation evidence only; they do not establish flashed behavior or valve safety. The PC simulator does not exercise this Dial specific Pi integration.
+For a future build, record the source commit, binary hash, and ESP-IDF version together. The ignored `.superpowers/sdd/2026-09-29-waveshare-dial-roon-valves/task-4-report.md` records this run's commands and results. A firmware source edit or rebuild needs a new artifact record.
+
+Run `PATH=/tmp/knob-bin:$PATH ./scripts/test_valve_dial.sh`, `bash /tmp/knob-idf-build.sh`, and `git diff --check`. A green host suite and ESP32-S3 build establish source and compilation evidence only; they do not establish flashed behavior or valve safety. The host integration session links the real portable valve client, UI, logic, and Roon bridge command planner to fake Pi and bridge responses; it does not exercise ESP HTTP transport, Rust bridge runtime, or physical hardware.
 
 The custom firmware has no bridge OTA check or update action. Configure the bridge deployment with `FIRMWARE_AUTO_UPDATE=false` so it does not auto-download upstream roon-knob images. Roon control continues through the existing bridge; valve requests go directly to the Pi. Future remote firmware updates require a dedicated controlled image feed, signature verification, rollback design, and a separate review and physical test.
 

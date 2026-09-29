@@ -34,6 +34,14 @@ cc -std=c11 -Wall -Wextra -Werror -DVALVE_CLIENT_HOST_TEST -Iidf_app/main \
 cc -std=c11 -Wall -Wextra -Werror -Itests/valve_dial/fakes -Iidf_app/main -Icommon \
     tests/valve_dial/test_valve_ui_sequence.c idf_app/main/valve_ui_dial.c \
     idf_app/main/valve_logic.c -o "$tmp_dir/test_valve_ui_sequence"
+cc -std=c11 -Wall -Wextra -Werror -DVALVE_CLIENT_HOST_TEST \
+    -Itests/valve_dial/fakes -Iidf_app/main -Icommon \
+    tests/valve_dial/test_valve_integration.c idf_app/main/valve_ui_dial.c \
+    idf_app/main/valve_client_dial.c idf_app/main/valve_logic.c \
+    common/bridge_command_plan.c -o "$tmp_dir/test_valve_integration"
+"$tmp_dir/test_valve_integration" > "$tmp_dir/integration.log" 2>&1
+! grep -q 'integration-private-token' "$tmp_dir/integration.log"
+cat "$tmp_dir/integration.log"
 "$tmp_dir/test_valve_ui_sequence"
 python3 - <<'PY'
 from pathlib import Path
@@ -74,4 +82,10 @@ for signature in ('void ota_check_for_update(bool force) {', 'void ota_start_upd
     assert 'return;' in disabled_branch
 assert 'check_update_task' not in ota.split('#ifndef RK_CUSTOM_VALVE_FIRMWARE', 1)[0]
 assert '#if !defined(RK_CUSTOM_VALVE_FIRMWARE)' in shared
+available = shared.split('void ui_set_update_available(const char *version) {', 1)[1].split('void ui_set_update_progress(', 1)[0]
+assert available.index('#ifdef RK_CUSTOM_VALVE_FIRMWARE') < available.index('lv_btn_create(')
+assert available.index('return;') < available.index('#else') < available.index('lv_btn_create(')
+trigger = shared.split('void ui_trigger_update(void) {', 1)[1].split('// ===', 1)[0]
+assert '#if defined(ESP_PLATFORM) && !defined(RK_CUSTOM_VALVE_FIRMWARE)' in trigger
+assert trigger.index('#if defined(ESP_PLATFORM) && !defined(RK_CUSTOM_VALVE_FIRMWARE)') < trigger.index('ota_start_update();') < trigger.index('#else')
 PY_GATE
