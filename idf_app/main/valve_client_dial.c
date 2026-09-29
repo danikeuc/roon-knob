@@ -18,9 +18,11 @@ typedef struct work_item {
     bool post;
     valve_action_t action;
     uint32_t session;
+    uint32_t request_id;
 } work_item_t;
 static bool s_connected;
 static uint32_t s_session;
+static uint32_t s_next_request_id;
 #ifndef VALVE_CLIENT_HOST_TEST
 static portMUX_TYPE s_session_lock = portMUX_INITIALIZER_UNLOCKED;
 #endif
@@ -44,6 +46,32 @@ static void session_change(bool connected) {
 #ifndef VALVE_CLIENT_HOST_TEST
     portEXIT_CRITICAL(&s_session_lock);
 #endif
+}
+uint32_t valve_client_current_session(void) {
+    uint32_t session;
+    (void)session_snapshot(&session);
+    return session;
+}
+static bool prepare_work(bool post, valve_action_t action, work_item_t *work,
+                         uint32_t *request_id) {
+    if (!work || (post && action != VALVE_ACTION_START_600S && action != VALVE_ACTION_DRAIN))
+        return false;
+#ifndef VALVE_CLIENT_HOST_TEST
+    portENTER_CRITICAL(&s_session_lock);
+#endif
+    bool connected = s_connected;
+    if (connected) {
+        work->post = post;
+        work->action = action;
+        work->session = s_session;
+        work->request_id = ++s_next_request_id;
+        if (work->request_id == 0) work->request_id = ++s_next_request_id;
+        if (request_id) *request_id = work->request_id;
+    }
+#ifndef VALVE_CLIENT_HOST_TEST
+    portEXIT_CRITICAL(&s_session_lock);
+#endif
+    return connected;
 }
 static valve_client_callback_fn s_callback;
 static void *s_callback_context;
@@ -167,11 +195,23 @@ static void dispatch(const work_item_t *work) {
     valve_client_result_t result = work->post ? valve_client_post(work->action, &status)
                                                : valve_client_get_status(&status);
     if (!session_snapshot(&current) || current != work->session) return;
-    if (s_callback) s_callback(result, &status, s_callback_context);
-    if (work->post && result != VALVE_CLIENT_OK && session_snapshot(&current)) {
+    if (s_callback) {
+        valve_client_event_t event = {.result = result, .status = status,
+            .request_id = work->request_id, .session = work->session,
+            .kind = work->post ? VALVE_CLIENT_EVENT_POST_STATUS : VALVE_CLIENT_EVENT_GET};
+        s_callback(&event, s_callback_context);
+    }
+    if (work->post && result != VALVE_CLIENT_OK &&
+        session_snapshot(&current) && current == work->session) {
         valve_status_t reconciled;
         valve_client_result_t check = valve_client_get_status(&reconciled);
-        if (s_callback) s_callback(check, &reconciled, s_callback_context);
+        if (!session_snapshot(&current) || current != work->session) return;
+        if (s_callback) {
+            valve_client_event_t event = {.result = check, .status = reconciled,
+                .request_id = work->request_id, .session = work->session,
+                .kind = VALVE_CLIENT_EVENT_RECOVERY_GET};
+            s_callback(&event, s_callback_context);
+        }
     }
 }
 static void clear_queue(void) {
@@ -216,15 +256,18 @@ bool valve_client_start(valve_client_callback_fn callback, void *context) {
     s_callback = callback; s_callback_context = context; return true;
 }
 bool valve_client_request_get(void) {
-    uint32_t session;
-    if (!session_snapshot(&session)) return false;
-    return host_enqueue((work_item_t){.post = false, .session = session});
+    return valve_client_request_get_tagged(NULL);
 }
 bool valve_client_request_post(valve_action_t action) {
-    uint32_t session;
-    if (!session_snapshot(&session) ||
-        (action != VALVE_ACTION_START_600S && action != VALVE_ACTION_DRAIN)) return false;
-    return host_enqueue((work_item_t){.post = true, .action = action, .session = session});
+    return valve_client_request_post_tagged(action, NULL);
+}
+bool valve_client_request_get_tagged(uint32_t *request_id) {
+    work_item_t item;
+    return prepare_work(false, VALVE_ACTION_DRAIN, &item, request_id) && host_enqueue(item);
+}
+bool valve_client_request_post_tagged(valve_action_t action, uint32_t *request_id) {
+    work_item_t item;
+    return prepare_work(true, action, &item, request_id) && host_enqueue(item);
 }
 #else
 static void worker_task(void *context) {
@@ -247,16 +290,19 @@ bool valve_client_start(valve_client_callback_fn callback, void *context) {
     return true;
 }
 bool valve_client_request_get(void) {
-    uint32_t session;
-    if (!s_queue || !session_snapshot(&session)) return false;
-    work_item_t item = {.post = false, .session = session};
-    return xQueueSend(s_queue, &item, 0) == pdTRUE;
+    return valve_client_request_get_tagged(NULL);
 }
 bool valve_client_request_post(valve_action_t action) {
-    uint32_t session;
-    if (!s_queue || !session_snapshot(&session) ||
-        (action != VALVE_ACTION_START_600S && action != VALVE_ACTION_DRAIN)) return false;
-    work_item_t item = {.post = true, .action = action, .session = session};
-    return xQueueSend(s_queue, &item, 0) == pdTRUE;
+    return valve_client_request_post_tagged(action, NULL);
+}
+bool valve_client_request_get_tagged(uint32_t *request_id) {
+    work_item_t item;
+    return s_queue && prepare_work(false, VALVE_ACTION_DRAIN, &item, request_id) &&
+           xQueueSend(s_queue, &item, 0) == pdTRUE;
+}
+bool valve_client_request_post_tagged(valve_action_t action, uint32_t *request_id) {
+    work_item_t item;
+    return s_queue && prepare_work(true, action, &item, request_id) &&
+           xQueueSend(s_queue, &item, 0) == pdTRUE;
 }
 #endif

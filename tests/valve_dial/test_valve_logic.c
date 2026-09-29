@@ -50,7 +50,8 @@ bool valve_config_load(char *url, size_t ul, char *token, size_t tl) {
     assert(ul >= 32 && tl >= 32);
     strcpy(url, "http://192.0.2.10:8081"); strcpy(token, "private-test-token"); return true;
 }
-static int next_status = 200, posts, gets, fail_transport, disconnect_during_request, callbacks;
+static int next_status = 200, posts, gets, fail_transport, disconnect_during_request;
+static int reconnect_on_get, callbacks, recovery_callbacks;
 static char trace[256];
 static int mock_transport(const char *method, const char *url, const char *token,
                           int *status, char *body, size_t cap, size_t *len, void *ctx) {
@@ -67,6 +68,11 @@ static int mock_transport(const char *method, const char *url, const char *token
     if (disconnect_during_request) {
         disconnect_during_request = 0;
         valve_client_on_disconnect();
+    }
+    if (reconnect_on_get && strcmp(method, "GET") == 0) {
+        reconnect_on_get = 0;
+        valve_client_on_disconnect();
+        valve_client_on_reconnect();
     }
     if (fail_transport) return -3;
     *status = next_status;
@@ -96,8 +102,10 @@ static void request_cases(void) {
     assert(posts == 2 && gets == 3 && strcmp(trace, "PGGPG") == 0);
     assert(valve_client_post((valve_action_t)99, &s) == VALVE_CLIENT_INVALID && posts == 2);
 }
-static void callback(valve_client_result_t result, const valve_status_t *status, void *context) {
-    (void)result; (void)status; (void)context; callbacks++;
+static valve_client_event_t last_event;
+static void callback(const valve_client_event_t *event, void *context) {
+    (void)context; callbacks++; last_event = *event;
+    if (event->kind == VALVE_CLIENT_EVENT_RECOVERY_GET) recovery_callbacks++;
 }
 static void scheduling_cases(void) {
     posts = gets = 0; trace[0] = 0; next_status = 200; fail_transport = 0;
@@ -128,6 +136,53 @@ static void scheduling_cases(void) {
     assert(valve_client_request_get());
     valve_client_test_run_pending();
     assert(callbacks == 0);
+}
+static void completion_order_cases(void) {
+    valve_observation_gate_t gate = {0};
+    valve_client_on_reconnect();
+    valve_client_test_run_pending();
+    valve_gate_link(&gate, valve_client_current_session());
+    uint32_t old_get, action;
+    assert(valve_client_request_get_tagged(&old_get));
+    assert(valve_client_request_post_tagged(VALVE_ACTION_START_600S, &action));
+    assert(action > old_get);
+    valve_gate_action(&gate, action);
+    assert(!valve_gate_accept(&gate, gate.session, old_get, true));
+    assert(gate.pending);
+    assert(valve_gate_accept(&gate, gate.session, action, true));
+    assert(!gate.pending);
+    valve_client_test_run_pending();
+    assert(last_event.request_id == action);
+    assert(last_event.kind == VALVE_CLIENT_EVENT_POST_STATUS);
+
+    valve_gate_link(&gate, valve_client_current_session());
+    uint32_t ids[5];
+    for (int i = 0; i < 5; i++) assert(valve_client_request_get_tagged(&ids[i]));
+    uint32_t barrier;
+    assert(valve_client_request_get_tagged(&barrier));
+    valve_gate_overflow(&gate, barrier);
+    for (int i = 0; i < 5; i++)
+        assert(!valve_gate_accept(&gate, gate.session, ids[i], true));
+    assert(gate.pending);
+    assert(valve_gate_accept(&gate, gate.session, barrier, true));
+    valve_client_test_run_pending();
+}
+static void recovery_session_cases(void) {
+    valve_client_on_disconnect();
+    valve_client_on_reconnect();
+    valve_client_test_run_pending();
+    posts = gets = callbacks = recovery_callbacks = 0;
+    next_status = 500;
+    reconnect_on_get = 1;
+    uint32_t request_id;
+    uint32_t original_session = valve_client_current_session();
+    assert(valve_client_request_post_tagged(VALVE_ACTION_START_600S, &request_id));
+    valve_client_test_run_pending();
+    assert(posts == 1);
+    assert(valve_client_current_session() != original_session);
+    assert(recovery_callbacks == 0);
+    assert(last_event.session == valve_client_current_session());
+    next_status = 200;
 }
 static void dial_cases(void) {
     valve_gesture_context_t normal = {0};
@@ -175,4 +230,4 @@ static void dial_cases(void) {
     assert(valve_touch_coordinate(180, 0) == 180);
     assert(valve_touch_coordinate(70, 180) == 289);
 }
-int main(void) { parse_cases(); request_cases(); scheduling_cases(); dial_cases(); puts("valve parser/client tests passed"); }
+int main(void) { parse_cases(); request_cases(); scheduling_cases(); completion_order_cases(); recovery_session_cases(); dial_cases(); puts("valve parser/client tests passed"); }

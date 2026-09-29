@@ -306,7 +306,7 @@ static void ui_loop_task(void *arg) {
         // Process pending display actions (e.g., swipe gestures)
         platform_display_process_pending();
 
-        valve_ui_process(lv_tick_get(), !display_is_sleeping());
+        valve_ui_process((uint32_t)(esp_timer_get_time() / 1000), !display_is_sleeping());
 
         // Run LVGL task handler
         ui_loop_iter();

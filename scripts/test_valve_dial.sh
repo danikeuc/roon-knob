@@ -31,6 +31,10 @@ cc -std=c11 -Wall -Wextra -Werror -DVALVE_CLIENT_HOST_TEST -Iidf_app/main \
     tests/valve_dial/test_valve_logic.c idf_app/main/valve_logic.c \
     idf_app/main/valve_client_dial.c -o "$tmp_dir/test_valve_logic"
 "$tmp_dir/test_valve_logic"
+cc -std=c11 -Wall -Wextra -Werror -Itests/valve_dial/fakes -Iidf_app/main -Icommon \
+    tests/valve_dial/test_valve_ui_sequence.c idf_app/main/valve_ui_dial.c \
+    idf_app/main/valve_logic.c -o "$tmp_dir/test_valve_ui_sequence"
+"$tmp_dir/test_valve_ui_sequence"
 python3 - <<'PY'
 from pathlib import Path
 touch = Path('idf_app/main/platform_display_idf.c').read_text()
@@ -46,4 +50,5 @@ assert 'LV_EVENT_CLICKED' not in ui
 assert 'data->state = s_touch_consumed ? LV_INDEV_STATE_RELEASED : LV_INDEV_STATE_PRESSED' in touch
 encoder = Path('idf_app/main/platform_input_idf.c').read_text()
 assert encoder.index('if (valve_ui_visible()) return;') < encoder.index('controller_input_dispatch_physical(&event)')
+assert encoder.index('if (display_get_state() != DISPLAY_STATE_NORMAL) valve_ui_wake();') < encoder.index('display_activity_detected();')
 PY

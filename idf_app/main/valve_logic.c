@@ -254,3 +254,25 @@ bool valve_drain_tap_allowed(bool started_on_drain, bool moved,
 int valve_touch_coordinate(int raw, int rotation) {
     return rotation == 180 ? 359 - raw : raw;
 }
+void valve_gate_link(valve_observation_gate_t *gate, uint32_t session) {
+    if (!gate) return;
+    *gate = (valve_observation_gate_t){.session = session, .pending = true};
+}
+void valve_gate_action(valve_observation_gate_t *gate, uint32_t request_id) {
+    if (!gate) return;
+    gate->minimum_request_id = request_id;
+    gate->pending = true;
+}
+void valve_gate_overflow(valve_observation_gate_t *gate, uint32_t barrier_id) {
+    if (!gate) return;
+    gate->minimum_request_id = barrier_id ? barrier_id : UINT32_MAX;
+    gate->pending = true;
+}
+bool valve_gate_accept(valve_observation_gate_t *gate, uint32_t session,
+                       uint32_t request_id, bool valid_status) {
+    if (!gate || !valid_status || session != gate->session || request_id == 0 ||
+        request_id < gate->minimum_request_id) return false;
+    gate->minimum_request_id = request_id;
+    gate->pending = false;
+    return true;
+}

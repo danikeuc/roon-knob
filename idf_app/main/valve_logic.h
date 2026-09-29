@@ -23,4 +23,14 @@ bool valve_drain_allowed(bool configured, bool connected);
 bool valve_drain_tap_allowed(bool started_on_drain, bool moved,
                              valve_gesture_t gesture, bool configured, bool connected);
 int valve_touch_coordinate(int raw, int rotation);
+typedef struct {
+    uint32_t session;
+    uint32_t minimum_request_id;
+    bool pending;
+} valve_observation_gate_t;
+void valve_gate_link(valve_observation_gate_t *gate, uint32_t session);
+void valve_gate_action(valve_observation_gate_t *gate, uint32_t request_id);
+void valve_gate_overflow(valve_observation_gate_t *gate, uint32_t barrier_id);
+bool valve_gate_accept(valve_observation_gate_t *gate, uint32_t session,
+                       uint32_t request_id, bool valid_status);
 #endif

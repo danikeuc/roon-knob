@@ -358,7 +358,7 @@ static void lvgl_tick_timer_cb(void *arg) {
 // LVGL touch read callback with swipe gesture detection
 static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
     uint16_t x, y;
-    uint32_t now_ms = lv_tick_get();
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
     if (tpGetCoordinates(&x, &y)) {
         display_state_t state = display_get_state();
         if (!s_touch_tracking) {
