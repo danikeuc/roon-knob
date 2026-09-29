@@ -1,6 +1,9 @@
 #include "platform_display_idf.h"
 #include "platform/platform_display.h"
 #include "display_sleep.h"
+#include "valve_ui_dial.h"
+#include "valve_logic.h"
+#include "ui.h"
 #include "bridge_client.h"
 #include "battery.h"
 #include "i2c_bsp.h"
@@ -32,6 +35,11 @@ static int16_t s_touch_start_x = 0;
 static int16_t s_touch_start_y = 0;
 static int64_t s_touch_start_time = 0;
 static bool s_touch_tracking = false;
+static bool s_touch_consumed = false;
+static bool s_touch_started_on_valve = false;
+static bool s_touch_wake = false;
+static int16_t s_touch_last_x, s_touch_last_y;
+static volatile bool s_pending_page_switch = false;
 static volatile bool s_pending_art_mode = false;   // Deferred art mode activation
 static volatile bool s_pending_exit_art_mode = false;  // Deferred art mode exit
 static uint16_t s_current_rotation = 0;  // Track rotation for swipe direction transform
@@ -349,108 +357,107 @@ static void lvgl_tick_timer_cb(void *arg) {
 
 // LVGL touch read callback with swipe gesture detection
 static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
-    (void)indev;
     uint16_t x, y;
-
+    uint32_t now_ms = lv_tick_get();
     if (tpGetCoordinates(&x, &y)) {
         display_state_t state = display_get_state();
-        bool was_not_normal = (state != DISPLAY_STATE_NORMAL);
-
-        // Always track touch for swipe detection (even during wake)
         if (!s_touch_tracking) {
             s_touch_start_x = x;
             s_touch_start_y = y;
-            s_touch_start_time = esp_timer_get_time() / 1000;  // Convert to ms
+            s_touch_start_time = now_ms;
             s_touch_tracking = true;
+            s_touch_consumed = false;
+            s_touch_started_on_valve = valve_ui_visible();
+            s_touch_wake = state != DISPLAY_STATE_NORMAL || display_is_touch_suppressed();
+            if (state != DISPLAY_STATE_NORMAL) valve_ui_wake();
         }
-
-        // Wake display if needed
-        if (was_not_normal) {
-            display_activity_detected();  // Wake display
-            // Consume this touch - don't pass to LVGL widgets (prevents accidental activation)
-            data->point.x = x;
-            data->point.y = y;
-            data->state = LV_INDEV_STATE_RELEASED;
-            return;  // Swipe tracking continues, but widget interaction suppressed
-        }
-
-        // Display already awake - check if touches suppressed after recent wake
-        if (display_is_touch_suppressed()) {
-            // Within 250ms after wake - suppress widget touches but track for swipes
-            data->point.x = x;  // Update coordinates for swipe detection
-            data->point.y = y;
+        s_touch_last_x = x;
+        s_touch_last_y = y;
+        display_activity_detected();
+        data->point.x = x;
+        data->point.y = y;
+        if (s_touch_wake || display_is_touch_suppressed()) {
             data->state = LV_INDEV_STATE_RELEASED;
             return;
         }
-
-        // Normal touch processing
-        display_activity_detected();  // Reset sleep timers
-        data->point.x = x;
-        data->point.y = y;
-        data->state = LV_INDEV_STATE_PRESSED;
-    } else {
-        data->state = LV_INDEV_STATE_RELEASED;
-
-        // Check for swipe gesture on release
-        if (s_touch_tracking) {
-            int64_t elapsed = (esp_timer_get_time() / 1000) - s_touch_start_time;
-            int64_t now_ms = esp_timer_get_time() / 1000;
-
-            if (elapsed < SWIPE_MAX_TIME_MS) {
-                int16_t dx = data->point.x - s_touch_start_x;
-                int16_t dy = data->point.y - s_touch_start_y;
-
-                // Transform swipe direction for 180° rotation (#43)
-                // When rotated 180°, user's "swipe up" produces positive raw dy
-                if (s_current_rotation == 180) {
-                    dy = -dy;
-                    dx = -dx;
-                }
-
-                // Check for swipe up (negative Y direction) - enter art mode
-                if (dy < -SWIPE_MIN_DISTANCE && abs(dy) > abs(dx)) {
-                    // Only allow art mode when WiFi is configured and bridge is responding with zones
-                    if (bridge_client_is_ready_for_art_mode()) {
-                        ESP_LOGI(TAG, "Swipe up detected (rotation=%d) - queueing art mode", s_current_rotation);
-                        s_pending_art_mode = true;  // Defer to avoid LVGL threading issues
-                    } else {
-                        ESP_LOGI(TAG, "Swipe up ignored - not ready for art mode (no zones)");
-                    }
-                }
-                // Check for swipe down (positive Y direction) - exit art mode
-                else if (dy > SWIPE_MIN_DISTANCE && abs(dy) > abs(dx)) {
-                    ESP_LOGI(TAG, "Swipe down detected (rotation=%d) - queueing exit art mode", s_current_rotation);
-                    s_pending_exit_art_mode = true;  // Defer to avoid LVGL threading issues
-                }
-                // Check for double-tap to enter art mode (#66)
-                // Only if this wasn't a swipe (small movement) and not already in art mode
-                // (any single tap exits art mode, so double-tap is only for entering)
-                else if (display_get_state() != DISPLAY_STATE_ART_MODE &&
-                         abs(dx) < DOUBLE_TAP_MAX_DISTANCE && abs(dy) < DOUBLE_TAP_MAX_DISTANCE) {
-                    int64_t tap_interval = now_ms - s_last_tap_time;
-                    int16_t tap_dx = abs(data->point.x - s_last_tap_x);
-                    int16_t tap_dy = abs(data->point.y - s_last_tap_y);
-
-                    if (tap_interval < DOUBLE_TAP_MAX_MS &&
-                        tap_dx < DOUBLE_TAP_MAX_DISTANCE &&
-                        tap_dy < DOUBLE_TAP_MAX_DISTANCE) {
-                        // Double-tap detected - enter art mode
-                        if (bridge_client_is_ready_for_art_mode()) {
-                            ESP_LOGI(TAG, "Double-tap detected - entering art mode");
-                            s_pending_art_mode = true;
-                        }
-                        s_last_tap_time = 0;  // Reset to prevent triple-tap
-                    } else {
-                        // First tap or tap too far from previous - record it
-                        s_last_tap_time = now_ms;
-                        s_last_tap_x = data->point.x;
-                        s_last_tap_y = data->point.y;
-                    }
-                }
+        int dx = (int)x - s_touch_start_x;
+        int dy = (int)y - s_touch_start_y;
+        valve_gesture_context_t context = {
+            .zone_picker = ui_is_zone_picker_visible(),
+            .settings = ui_is_settings_visible(),
+            .art_mode = state == DISPLAY_STATE_ART_MODE,
+            .wake_touch = s_touch_wake,
+        };
+        valve_gesture_t gesture = valve_gesture_classify(dx, dy,
+            now_ms - (uint32_t)s_touch_start_time, s_current_rotation, context);
+        if (!s_touch_consumed && gesture == VALVE_GESTURE_SWITCH_SCREEN) {
+            s_touch_consumed = true;
+            s_pending_page_switch = true;
+            valve_ui_cancel_touch();
+            /* Cancel the active LVGL press before a release can produce CLICKED. */
+            lv_indev_reset(indev, NULL);
+        }
+        if (s_touch_started_on_valve) {
+            if (!s_touch_consumed)
+                valve_ui_touch(valve_touch_coordinate(x, s_current_rotation),
+                               valve_touch_coordinate(y, s_current_rotation),
+                               true, abs(dx) > 20 || abs(dy) > 20, now_ms);
+            data->state = LV_INDEV_STATE_RELEASED;
+        } else {
+            data->state = s_touch_consumed ? LV_INDEV_STATE_RELEASED : LV_INDEV_STATE_PRESSED;
+        }
+        return;
+    }
+    /* Use the last real touch coordinate; LVGL's release point may be stale. */
+    data->point.x = s_touch_last_x;
+    data->point.y = s_touch_last_y;
+    data->state = LV_INDEV_STATE_RELEASED;
+    if (!s_touch_tracking) return;
+    uint32_t elapsed = now_ms - (uint32_t)s_touch_start_time;
+    int dx = s_touch_last_x - s_touch_start_x;
+    int dy = s_touch_last_y - s_touch_start_y;
+    valve_gesture_context_t context = {
+        .zone_picker = ui_is_zone_picker_visible(),
+        .settings = ui_is_settings_visible(),
+        .art_mode = display_get_state() == DISPLAY_STATE_ART_MODE,
+        .wake_touch = s_touch_wake,
+    };
+    valve_gesture_t gesture = valve_gesture_classify(dx, dy, elapsed,
+                                                      s_current_rotation, context);
+    if (gesture == VALVE_GESTURE_SWITCH_SCREEN && !s_touch_consumed) {
+        s_touch_consumed = true;
+        s_pending_page_switch = true;
+        lv_indev_reset(indev, NULL);
+    }
+    if (s_touch_started_on_valve) {
+        if (!s_touch_consumed && !s_touch_wake)
+            valve_ui_touch(valve_touch_coordinate(s_touch_last_x, s_current_rotation),
+                           valve_touch_coordinate(s_touch_last_y, s_current_rotation),
+                           false,
+                           abs(dx) > 20 || abs(dy) > 20, now_ms);
+        else valve_ui_cancel_touch();
+    } else if (!s_touch_consumed && !s_touch_wake) {
+        if (gesture == VALVE_GESTURE_ART_UP && bridge_client_is_ready_for_art_mode())
+            s_pending_art_mode = true;
+        else if (gesture == VALVE_GESTURE_ART_DOWN)
+            s_pending_exit_art_mode = true;
+        else if (abs(dx) < DOUBLE_TAP_MAX_DISTANCE && abs(dy) < DOUBLE_TAP_MAX_DISTANCE &&
+                 display_get_state() != DISPLAY_STATE_ART_MODE) {
+            int64_t interval = now_ms - s_last_tap_time;
+            if (interval < DOUBLE_TAP_MAX_MS &&
+                abs(s_touch_last_x - s_last_tap_x) < DOUBLE_TAP_MAX_DISTANCE &&
+                abs(s_touch_last_y - s_last_tap_y) < DOUBLE_TAP_MAX_DISTANCE) {
+                if (bridge_client_is_ready_for_art_mode()) s_pending_art_mode = true;
+                s_last_tap_time = 0;
+            } else {
+                s_last_tap_time = now_ms;
+                s_last_tap_x = s_touch_last_x;
+                s_last_tap_y = s_touch_last_y;
             }
-            s_touch_tracking = false;
         }
     }
+    s_touch_tracking = false;
+    s_touch_consumed = false;
 }
 
 bool platform_display_init(void) {
@@ -626,6 +633,11 @@ bool platform_display_is_sleeping(void) {
 }
 
 void platform_display_process_pending(void) {
+    if (s_pending_page_switch) {
+        s_pending_page_switch = false;
+        valve_ui_show(!valve_ui_visible());
+        s_last_tap_time = 0;
+    }
     // Process deferred swipe gesture art mode
     if (s_pending_art_mode) {
         s_pending_art_mode = false;

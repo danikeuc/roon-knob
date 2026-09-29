@@ -50,7 +50,7 @@ bool valve_config_load(char *url, size_t ul, char *token, size_t tl) {
     assert(ul >= 32 && tl >= 32);
     strcpy(url, "http://192.0.2.10:8081"); strcpy(token, "private-test-token"); return true;
 }
-static int next_status = 200, posts, gets, fail_transport;
+static int next_status = 200, posts, gets, fail_transport, disconnect_during_request, callbacks;
 static char trace[256];
 static int mock_transport(const char *method, const char *url, const char *token,
                           int *status, char *body, size_t cap, size_t *len, void *ctx) {
@@ -64,6 +64,10 @@ static int mock_transport(const char *method, const char *url, const char *token
         strcat(trace, "P");
     } else { gets++; assert(strcmp(method, "GET") == 0);
         assert(strcmp(url, "http://192.0.2.10:8081/api/v1/display/status") == 0); strcat(trace, "G"); }
+    if (disconnect_during_request) {
+        disconnect_during_request = 0;
+        valve_client_on_disconnect();
+    }
     if (fail_transport) return -3;
     *status = next_status;
     const char *payload = strcmp(method, "POST") == 0 ? "{}" : ready;
@@ -93,7 +97,7 @@ static void request_cases(void) {
     assert(valve_client_post((valve_action_t)99, &s) == VALVE_CLIENT_INVALID && posts == 2);
 }
 static void callback(valve_client_result_t result, const valve_status_t *status, void *context) {
-    (void)result; (void)status; (void)context;
+    (void)result; (void)status; (void)context; callbacks++;
 }
 static void scheduling_cases(void) {
     posts = gets = 0; trace[0] = 0; next_status = 200; fail_transport = 0;
@@ -116,5 +120,59 @@ static void scheduling_cases(void) {
     valve_client_on_disconnect(); valve_client_on_reconnect();
     valve_client_test_run_pending();
     assert(posts == 0 && gets == 1);
+    callbacks = 0;
+    valve_client_on_reconnect();
+    valve_client_test_run_pending();
+    callbacks = 0;
+    disconnect_during_request = 1;
+    assert(valve_client_request_get());
+    valve_client_test_run_pending();
+    assert(callbacks == 0);
 }
-int main(void) { parse_cases(); request_cases(); scheduling_cases(); puts("valve parser/client tests passed"); }
+static void dial_cases(void) {
+    valve_gesture_context_t normal = {0};
+    for (int rotation = 0; rotation <= 180; rotation += 180) {
+        assert(valve_gesture_classify(80, 5, 250, rotation, normal) == VALVE_GESTURE_SWITCH_SCREEN);
+        assert(valve_gesture_classify(-80, 5, 250, rotation, normal) == VALVE_GESTURE_SWITCH_SCREEN);
+        assert(valve_gesture_classify(5, rotation == 180 ? 80 : -80, 250, rotation, normal) == VALVE_GESTURE_ART_UP);
+        assert(valve_gesture_classify(5, rotation == 180 ? -80 : 80, 250, rotation, normal) == VALVE_GESTURE_ART_DOWN);
+        assert(valve_gesture_classify(70, 70, 250, rotation, normal) == VALVE_GESTURE_NONE);
+        assert(valve_gesture_classify(80, 0, 501, rotation, normal) == VALVE_GESTURE_NONE);
+    }
+    normal.zone_picker = true;
+    assert(valve_gesture_classify(100, 0, 100, 0, normal) == VALVE_GESTURE_NONE);
+    normal.zone_picker = false; normal.settings = true;
+    assert(valve_gesture_classify(100, 0, 100, 0, normal) == VALVE_GESTURE_NONE);
+    normal.settings = false; normal.art_mode = true;
+    assert(valve_gesture_classify(100, 0, 100, 0, normal) == VALVE_GESTURE_NONE);
+    normal.art_mode = false; normal.wake_touch = true;
+    assert(valve_gesture_classify(100, 0, 100, 0, normal) == VALVE_GESTURE_NONE);
+
+    valve_hold_t hold = {0};
+    assert(!valve_hold_update(&hold, true, false, 100));
+    assert(!valve_hold_update(&hold, true, false, 2099));
+    assert(!valve_hold_update(&hold, false, false, 2100));
+    assert(!valve_hold_update(&hold, true, false, 3000));
+    assert(!valve_hold_update(&hold, true, true, 4000));
+    assert(!valve_hold_update(&hold, false, false, 4001));
+    assert(!valve_hold_update(&hold, true, false, 5000));
+    assert(!valve_hold_update(&hold, true, false, 6999));
+    assert(valve_hold_update(&hold, true, false, 7000));
+    assert(!valve_hold_update(&hold, true, false, 8000));
+    assert(!valve_hold_update(&hold, false, false, 8001));
+    assert(valve_supply_allowed(VALVE_DRAIN, true, true, 9999));
+    assert(!valve_supply_allowed(VALVE_DRAIN, true, true, 10000));
+    assert(!valve_supply_allowed(VALVE_UNKNOWN, true, true, 0));
+    assert(!valve_supply_allowed(VALVE_SUPPLY, true, true, 0));
+    assert(!valve_supply_allowed(VALVE_DRAIN, false, true, 0));
+    assert(valve_drain_allowed(true, true));
+    assert(!valve_drain_allowed(true, false));
+    assert(!valve_drain_allowed(false, true));
+    assert(valve_drain_tap_allowed(true, false, VALVE_GESTURE_NONE, true, true));
+    assert(!valve_drain_tap_allowed(true, true, VALVE_GESTURE_SWITCH_SCREEN, true, true));
+    assert(!valve_drain_tap_allowed(false, false, VALVE_GESTURE_NONE, true, true));
+    assert(!valve_drain_tap_allowed(true, false, VALVE_GESTURE_NONE, true, false));
+    assert(valve_touch_coordinate(180, 0) == 180);
+    assert(valve_touch_coordinate(70, 180) == 289);
+}
+int main(void) { parse_cases(); request_cases(); scheduling_cases(); dial_cases(); puts("valve parser/client tests passed"); }

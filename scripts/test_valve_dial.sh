@@ -31,3 +31,19 @@ cc -std=c11 -Wall -Wextra -Werror -DVALVE_CLIENT_HOST_TEST -Iidf_app/main \
     tests/valve_dial/test_valve_logic.c idf_app/main/valve_logic.c \
     idf_app/main/valve_client_dial.c -o "$tmp_dir/test_valve_logic"
 "$tmp_dir/test_valve_logic"
+python3 - <<'PY'
+from pathlib import Path
+touch = Path('idf_app/main/platform_display_idf.c').read_text()
+ui = Path('idf_app/main/valve_ui_dial.c').read_text()
+assert 'if (s_touch_started_on_valve)' in touch
+press = touch[touch.index('if (s_touch_started_on_valve)'):touch.index('return;', touch.index('if (s_touch_started_on_valve)'))]
+assert 'valve_ui_touch(valve_touch_coordinate(x, s_current_rotation)' in press
+assert 'data->state = LV_INDEV_STATE_RELEASED' in press
+release = touch[touch.index('valve_gesture_t gesture = valve_gesture_classify', touch.index('/* Use the last real touch coordinate')):]
+assert release.index('gesture == VALVE_GESTURE_SWITCH_SCREEN') < release.index('valve_ui_touch(valve_touch_coordinate(s_touch_last_x, s_current_rotation)')
+assert 'lv_indev_reset(indev, NULL)' in release[:release.index('valve_ui_touch(valve_touch_coordinate(s_touch_last_x, s_current_rotation)')]
+assert 'LV_EVENT_CLICKED' not in ui
+assert 'data->state = s_touch_consumed ? LV_INDEV_STATE_RELEASED : LV_INDEV_STATE_PRESSED' in touch
+encoder = Path('idf_app/main/platform_input_idf.c').read_text()
+assert encoder.index('if (valve_ui_visible()) return;') < encoder.index('controller_input_dispatch_physical(&event)')
+PY

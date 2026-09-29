@@ -2,6 +2,7 @@
 #include "controller_input.h"
 #include "controller_input_mailbox.h"
 #include "display_sleep.h"
+#include "valve_ui_dial.h"
 
 #include "driver/gpio.h"
 #include "esp_log.h"
@@ -258,6 +259,8 @@ void platform_input_process_events(void) {
 
     if (total_ticks != 0) {
         display_activity_detected();  // Wake display and reset sleep timers
+
+        if (valve_ui_visible()) return;  // Encoder controls Roon only.
 
         // Suppress encoder events right after deep sleep wake
         // (the encoder tick that woke us shouldn't change volume)

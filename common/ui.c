@@ -61,6 +61,9 @@ static lv_obj_t *s_progress_arc;       // Inner arc for track progress
 static lv_obj_t *s_volume_label_large; // Volume display (large, prominent) - primary display
 static lv_timer_t *s_volume_emphasis_timer;  // Timer to reset volume emphasis after adjustment
 static lv_obj_t *s_status_dot;         // Online/offline indicator
+static lv_obj_t *s_valve_indicator;
+static bool s_valve_active;
+static bool s_controls_visible = true;
 static lv_obj_t *s_battery_icon;       // Battery icon (Material Symbols)
 static lv_obj_t *s_zone_label;         // Zone name
 static lv_obj_t *s_btn_prev;           // Previous track button
@@ -362,6 +365,11 @@ static void build_layout(void) {
     lv_obj_set_style_radius(s_status_dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_border_width(s_status_dot, 0, 0);
     lv_obj_align(s_status_dot, LV_ALIGN_TOP_RIGHT, -35, 35);
+    s_valve_indicator = lv_label_create(s_ui_container);
+    lv_label_set_text(s_valve_indicator, "VALVE ON");
+    lv_obj_set_style_text_color(s_valve_indicator, lv_color_hex(0xffaa44), 0);
+    lv_obj_align(s_valve_indicator, LV_ALIGN_BOTTOM_MID, 0, -12);
+    lv_obj_add_flag(s_valve_indicator, LV_OBJ_FLAG_HIDDEN);
 
     // ========================================================================
     // Header group - battery + zone at top (flex column, explicit position)
@@ -1451,6 +1459,7 @@ void ui_trigger_update(void) {
 // ============================================================================
 
 void ui_set_controls_visible(bool visible) {
+    s_controls_visible = visible;
     if (visible) {
         // Show all controls
         if (s_btn_prev) lv_obj_clear_flag(s_btn_prev, LV_OBJ_FLAG_HIDDEN);
@@ -1463,6 +1472,8 @@ void ui_set_controls_visible(bool visible) {
         if (s_battery_icon) lv_obj_clear_flag(s_battery_icon, LV_OBJ_FLAG_HIDDEN);
         if (s_status_dot) lv_obj_clear_flag(s_status_dot, LV_OBJ_FLAG_HIDDEN);
         if (s_status_bar) lv_obj_clear_flag(s_status_bar, LV_OBJ_FLAG_HIDDEN);
+        if (s_valve_indicator && s_valve_active)
+            lv_obj_clear_flag(s_valve_indicator, LV_OBJ_FLAG_HIDDEN);
         // Restore artwork dimming for text contrast
         if (s_artwork_image) lv_obj_set_style_img_opa(s_artwork_image, LV_OPA_40, 0);
         ESP_LOGI(UI_TAG, "Controls shown");
@@ -1482,8 +1493,16 @@ void ui_set_controls_visible(bool visible) {
         if (s_battery_icon) lv_obj_add_flag(s_battery_icon, LV_OBJ_FLAG_HIDDEN);
         if (s_status_dot) lv_obj_add_flag(s_status_dot, LV_OBJ_FLAG_HIDDEN);
         if (s_status_bar) lv_obj_add_flag(s_status_bar, LV_OBJ_FLAG_HIDDEN);
+        if (s_valve_indicator) lv_obj_add_flag(s_valve_indicator, LV_OBJ_FLAG_HIDDEN);
         // Make artwork fully visible in art mode
         if (s_artwork_image) lv_obj_set_style_img_opa(s_artwork_image, LV_OPA_COVER, 0);
         ESP_LOGI(UI_TAG, "Controls hidden (art mode)");
     }
+}
+
+void ui_set_valve_active(bool active) {
+    s_valve_active = active;
+    if (!s_valve_indicator) return;
+    if (active && s_controls_visible) lv_obj_clear_flag(s_valve_indicator, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(s_valve_indicator, LV_OBJ_FLAG_HIDDEN);
 }

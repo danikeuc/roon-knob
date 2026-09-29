@@ -3,6 +3,7 @@
 #include "third_party/jsmn.h"
 #include <ctype.h>
 #include <string.h>
+#include <stdlib.h>
 
 #define STATUS_MAX_BYTES 2048
 #define STATUS_MAX_TOKENS 128
@@ -215,4 +216,41 @@ bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
     out->remaining_seconds = remaining;
     memcpy(out->reason, reason, sizeof reason);
     return true;
+}
+
+valve_gesture_t valve_gesture_classify(int dx, int dy, uint32_t elapsed_ms,
+                                       int rotation, valve_gesture_context_t context) {
+    if (context.wake_touch || context.zone_picker || context.settings || elapsed_ms > 500)
+        return VALVE_GESTURE_NONE;
+    if (rotation == 180) { dx = -dx; dy = -dy; }
+    if (abs(dx) >= 60 && abs(dx) > abs(dy) && !context.art_mode)
+        return VALVE_GESTURE_SWITCH_SCREEN;
+    if (abs(dy) >= 60 && abs(dy) > abs(dx))
+        return dy < 0 ? VALVE_GESTURE_ART_UP : VALVE_GESTURE_ART_DOWN;
+    return VALVE_GESTURE_NONE;
+}
+
+bool valve_hold_update(valve_hold_t *hold, bool pressed, bool moved, uint32_t now_ms) {
+    if (!hold) return false;
+    if (!pressed) { *hold = (valve_hold_t){0}; return false; }
+    if (moved) { hold->cancelled = true; return false; }
+    if (!hold->tracking) { hold->tracking = true; hold->started_ms = now_ms; return false; }
+    if (hold->cancelled || hold->emitted || now_ms - hold->started_ms < 2000) return false;
+    hold->emitted = true;
+    return true;
+}
+
+bool valve_supply_allowed(valve_state_t state, bool configured, bool connected, uint32_t age_ms) {
+    return state == VALVE_DRAIN && configured && connected && age_ms < 10000;
+}
+bool valve_drain_allowed(bool configured, bool connected) {
+    return configured && connected;
+}
+bool valve_drain_tap_allowed(bool started_on_drain, bool moved,
+                             valve_gesture_t gesture, bool configured, bool connected) {
+    return started_on_drain && !moved && gesture == VALVE_GESTURE_NONE &&
+           valve_drain_allowed(configured, connected);
+}
+int valve_touch_coordinate(int raw, int rotation) {
+    return rotation == 180 ? 359 - raw : raw;
 }

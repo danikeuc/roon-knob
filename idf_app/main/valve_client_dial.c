@@ -166,6 +166,7 @@ static void dispatch(const work_item_t *work) {
     valve_status_t status;
     valve_client_result_t result = work->post ? valve_client_post(work->action, &status)
                                                : valve_client_get_status(&status);
+    if (!session_snapshot(&current) || current != work->session) return;
     if (s_callback) s_callback(result, &status, s_callback_context);
     if (work->post && result != VALVE_CLIENT_OK && session_snapshot(&current)) {
         valve_status_t reconciled;

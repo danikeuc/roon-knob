@@ -15,6 +15,8 @@
 #include "ui.h"
 #include "ui_network.h"
 #include "wifi_manager.h"
+#include "valve_client_dial.h"
+#include "valve_ui_dial.h"
 
 #include "lvgl.h"
 
@@ -165,6 +167,8 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
 
     switch (evt) {
     case RK_NET_EVT_CONNECTING: {
+        valve_client_on_disconnect();
+        valve_ui_connected(false);
         int retry = wifi_mgr_get_retry_count();
         ESP_LOGI(TAG, "WiFi: Connecting... (retry %d)", retry);
         // Only show "Connecting..." on first attempt; during retries, keep showing error/retry
@@ -176,6 +180,8 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
     }
 
     case RK_NET_EVT_GOT_IP:
+        valve_client_on_reconnect();
+        valve_ui_connected(true);
         ESP_LOGI(TAG, "WiFi connected with IP: %s", ip_opt ? ip_opt : "unknown");
         stop_wifi_msg_alternation();
         ui_update("WiFi: Connected", "", false, 0.0f, 0.0f, 100.0f, 1.0f, 0, 0);
@@ -194,6 +200,8 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
     case RK_NET_EVT_WRONG_PASSWORD:
     case RK_NET_EVT_NO_AP_FOUND:
     case RK_NET_EVT_AUTH_TIMEOUT: {
+        valve_client_on_disconnect();
+        valve_ui_connected(false);
         int attempt = wifi_mgr_get_retry_count();
         int max = wifi_mgr_get_retry_max();
         const char *error = ip_opt ? ip_opt : "Connection failed";
@@ -204,6 +212,8 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
     }
 
     case RK_NET_EVT_AP_STARTED:
+        valve_client_on_disconnect();
+        valve_ui_connected(false);
         ESP_LOGI(TAG, "WiFi: AP mode started (SSID: hiphi-dial-setup)");
         stop_wifi_msg_alternation();
         // Show setup instructions in main display area (line2 is top, line1 is bottom)
@@ -295,6 +305,8 @@ static void ui_loop_task(void *arg) {
 
         // Process pending display actions (e.g., swipe gestures)
         platform_display_process_pending();
+
+        valve_ui_process(lv_tick_get(), !display_is_sleeping());
 
         // Run LVGL task handler
         ui_loop_iter();
@@ -421,6 +433,7 @@ void app_main(void) {
     // Now safe to initialize UI (depends on LVGL display being registered)
     ESP_LOGI(TAG, "Initializing UI...");
     ui_init();
+    valve_ui_init();
     log_lvgl_memory("after UI initialization");
     log_memory("after UI initialization");
 

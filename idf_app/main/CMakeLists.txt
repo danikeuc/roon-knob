@@ -5,6 +5,7 @@ set(SRC_FILES
     "valve_config_dial.c"
     "valve_logic.c"
     "valve_client_dial.c"
+    "valve_ui_dial.c"
     "http_server_lifecycle.c"
     "dns_server.c"
     "ui_network.c"
