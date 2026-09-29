@@ -52,3 +52,26 @@ encoder = Path('idf_app/main/platform_input_idf.c').read_text()
 assert encoder.index('if (valve_ui_visible()) return;') < encoder.index('controller_input_dispatch_physical(&event)')
 assert encoder.index('if (display_get_state() != DISPLAY_STATE_NORMAL) valve_ui_wake();') < encoder.index('display_activity_detected();')
 PY
+
+# Custom valve firmware must not reach the upstream bridge OTA feed.
+python3 - <<'PY_GATE'
+from pathlib import Path
+main = Path('idf_app/main/main_idf.c').read_text()
+network = Path('idf_app/main/ui_network.c').read_text()
+ota = Path('idf_app/main/ota_update.c').read_text()
+shared = Path('common/ui.c').read_text()
+cmake = Path('idf_app/main/CMakeLists.txt').read_text()
+assert 'RK_CUSTOM_VALVE_FIRMWARE=1' in cmake
+assert 'ota_check_for_update(' not in main
+assert 'ota_check_for_update(' not in network
+assert 'ota_start_update(' not in network
+assert 'Check for Update' not in network
+assert '#ifdef RK_CUSTOM_VALVE_FIRMWARE' in ota
+assert 'Upstream bridge OTA is disabled' in ota
+for signature in ('void ota_check_for_update(bool force) {', 'void ota_start_update(void) {'):
+    disabled_branch = ota.split(signature, 1)[1].split('#else', 1)[0]
+    assert '#ifdef RK_CUSTOM_VALVE_FIRMWARE' in disabled_branch
+    assert 'return;' in disabled_branch
+assert 'check_update_task' not in ota.split('#ifndef RK_CUSTOM_VALVE_FIRMWARE', 1)[0]
+assert '#if !defined(RK_CUSTOM_VALVE_FIRMWARE)' in shared
+PY_GATE

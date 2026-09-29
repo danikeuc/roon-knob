@@ -42,7 +42,6 @@ static const char *TAG = "main";
 static TaskHandle_t g_ui_task_handle = NULL;
 
 // Deferred operations flags (set in event handler, processed in UI task)
-static volatile bool s_ota_check_pending = false;
 /* These cross the default event-loop/UI-task boundary.  AP teardown wins over
  * a stale STA start request. */
 static atomic_bool s_config_server_start_pending = ATOMIC_VAR_INIT(false);
@@ -189,7 +188,6 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
         bridge_client_set_network_ready(true);
         // Defer heavy operations to UI task (sys_evt has limited stack)
         s_mdns_init_pending = true;  // mDNS needs network up first
-        s_ota_check_pending = true;
         atomic_store_explicit(&s_config_server_start_pending, true,
                               memory_order_release);
         s_ble_init_pending = true;
@@ -236,68 +234,10 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
     }
 }
 
-static void check_ota_status(void) {
-    static ota_status_t last_status = OTA_STATUS_IDLE;
-    static int last_progress = -1;
-
-    const ota_info_t *info = ota_get_info();
-
-    // Update UI when status changes
-    if (info->status != last_status) {
-        ESP_LOGI(TAG, "OTA status change: %d -> %d", last_status, info->status);
-        last_status = info->status;
-
-        switch (info->status) {
-            case OTA_STATUS_IDLE:
-                ESP_LOGI(TAG, "OTA: Idle");
-                break;
-            case OTA_STATUS_CHECKING:
-                ESP_LOGI(TAG, "OTA: Checking for updates...");
-                break;
-            case OTA_STATUS_AVAILABLE:
-                ESP_LOGI(TAG, "OTA: Update available: %s", info->available_version);
-                ui_set_update_available(info->available_version);
-                break;
-            case OTA_STATUS_UP_TO_DATE:
-                ESP_LOGI(TAG, "OTA: Firmware is up to date");
-                ui_set_update_available(NULL);
-                break;
-            case OTA_STATUS_DOWNLOADING:
-                ESP_LOGI(TAG, "OTA: Downloading update...");
-                ui_set_update_progress(0);
-                break;
-            case OTA_STATUS_COMPLETE:
-                ESP_LOGI(TAG, "OTA: Update complete, rebooting...");
-                ui_set_message("Update complete! Rebooting...");
-                break;
-            case OTA_STATUS_ERROR:
-                ESP_LOGE(TAG, "OTA: Error: %s", info->error_msg);
-                ui_set_message(info->error_msg);
-                ui_set_update_available(NULL);
-                break;
-            default:
-                ESP_LOGW(TAG, "OTA: Unknown status %d", info->status);
-                break;
-        }
-    }
-
-    // Update progress during download (and keep display awake)
-    if (info->status == OTA_STATUS_DOWNLOADING) {
-        display_activity_detected();  // Keep display awake during OTA
-        if (info->progress_percent != last_progress) {
-            last_progress = info->progress_percent;
-            ui_set_update_progress(info->progress_percent);
-            ESP_LOGI(TAG, "OTA progress: %d%%", info->progress_percent);
-        }
-    }
-}
-
 static void ui_loop_task(void *arg) {
     (void)arg;
     ESP_LOGI(TAG, "UI loop task started on core %d", xPortGetCoreID());
     log_memory("UI loop start");
-
-    uint32_t ota_check_counter = 0;
 
     while (true) {
         // Process queued input events from ISR context
@@ -310,12 +250,6 @@ static void ui_loop_task(void *arg) {
 
         // Run LVGL task handler
         ui_loop_iter();
-
-        // Check OTA status periodically (every 500ms = 50 iterations at 10ms)
-        if (++ota_check_counter >= 50) {
-            ota_check_counter = 0;
-            check_ota_status();
-        }
 
         // Keep early boot telemetry frequent enough to attribute BLE allocations,
         // then reduce it to once per minute for normal operation.
@@ -356,11 +290,6 @@ static void ui_loop_task(void *arg) {
             s_mdns_init_pending = false;
             ESP_LOGI(TAG, "Initializing mDNS (network is up)...");
             platform_mdns_init(wifi_mgr_get_hostname());
-        }
-        if (s_ota_check_pending) {
-            s_ota_check_pending = false;
-            ESP_LOGI(TAG, "Checking for firmware updates...");
-            ota_check_for_update(false);  // Auto-check: skip for dev versions
         }
         if (s_ble_init_pending) {
             s_ble_init_pending = false;
@@ -405,8 +334,8 @@ void app_main(void) {
         ESP_LOGW(TAG, "Battery monitoring init failed, continuing without it");
     }
 
-    // Initialize OTA update module
-    ESP_LOGI(TAG, "Initializing OTA update module...");
+    // Retain version metadata; bridge OTA is disabled for this custom image.
+    ESP_LOGI(TAG, "Initializing firmware version metadata...");
     ota_init();
 
     // Initialize LVGL library

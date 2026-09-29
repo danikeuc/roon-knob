@@ -14,6 +14,7 @@
 static const char *TAG = "ota";
 
 static ota_info_t s_ota_info = {0};
+#ifndef RK_CUSTOM_VALVE_FIRMWARE
 static TaskHandle_t s_ota_task = NULL;
 
 // Get bridge base URL from storage
@@ -27,6 +28,8 @@ static bool get_bridge_url(char *url, size_t len) {
     }
     return false;
 }
+
+#endif
 
 const char* ota_get_current_version(void) {
     const esp_app_desc_t *app_desc = esp_app_get_description();
@@ -62,6 +65,7 @@ int ota_compare_versions(const char* v1, const char* v2) {
     return 0;  // Identical
 }
 
+#ifndef RK_CUSTOM_VALVE_FIRMWARE
 static void check_update_task(void *arg) {
     char bridge_url[128];
     char url[192];
@@ -345,6 +349,8 @@ static void do_update_task(void *arg) {
     vTaskDelete(NULL);
 }
 
+#endif
+
 void ota_init(void) {
     memset(&s_ota_info, 0, sizeof(s_ota_info));
     strncpy(s_ota_info.current_version, ota_get_current_version(), sizeof(s_ota_info.current_version) - 1);
@@ -353,6 +359,11 @@ void ota_init(void) {
 }
 
 void ota_check_for_update(bool force) {
+#ifdef RK_CUSTOM_VALVE_FIRMWARE
+    (void)force;
+    // Upstream bridge OTA is disabled for the custom valve image.
+    return;
+#else
     if (s_ota_task != NULL) {
         ESP_LOGW(TAG, "OTA task already running");
         return;
@@ -369,9 +380,14 @@ void ota_check_for_update(bool force) {
     }
 
     xTaskCreate(check_update_task, "ota_check", 8192, NULL, 1, &s_ota_task);  // Low priority to not block UI
+#endif
 }
 
 void ota_start_update(void) {
+#ifdef RK_CUSTOM_VALVE_FIRMWARE
+    // Upstream bridge OTA is disabled even if another UI call site appears.
+    return;
+#else
     if (s_ota_task != NULL) {
         ESP_LOGW(TAG, "OTA task already running");
         return;
@@ -383,6 +399,7 @@ void ota_start_update(void) {
     }
 
     xTaskCreate(do_update_task, "ota_update", 8192, NULL, 1, &s_ota_task);  // Low priority to not block UI
+#endif
 }
 
 const ota_info_t* ota_get_info(void) {

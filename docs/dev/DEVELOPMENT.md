@@ -92,6 +92,20 @@ git push origin v1.2.7
 
 The CI builds firmware, creates a GitHub release, and deploys the web flasher.
 
+## Custom valve dial verification
+
+For this branch, use ESP-IDF **5.5.5** and target **esp32s3**. From the repository root:
+
+```bash
+PATH=/tmp/knob-bin:$PATH ./scripts/test_valve_dial.sh
+bash /tmp/knob-idf-build.sh
+git rev-parse HEAD
+```
+
+The host suite checks valve parsing, request scheduling, gestures, UI sequence, and the custom image OTA source gate. The ESP-IDF build verifies compilation only. Neither check verifies the display, encoder, Wi-Fi, GPIO, relay, or physical valve on a device. Record the exact firmware commit and built binary hash before flashing; use the separate [valve dial commissioning runbook](../valve-dial-commissioning.md) for physical validation. Do not use the generic release/tag instructions above for this custom valve image.
+
+This build disables the bridge's upstream firmware update check and both update actions. Its network panel has no update button. A future remote updater requires a separately reviewed custom feed, image authentication/signature verification, rollback behavior, and hardware validation before enabling any OTA entry point. The bridge deployment example also sets `FIRMWARE_AUTO_UPDATE=false`; verify that the running deployment actually uses that setting.
+
 ## Bridge Development
 
 Bridge code is at [unified-hifi-control](https://github.com/cloud-atlas-ai/unified-hifi-control).

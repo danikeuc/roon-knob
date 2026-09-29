@@ -99,7 +99,9 @@ static int s_zone_picker_current = -1;     // Currently active zone (no-op if se
 
 // OTA update notification
 static lv_obj_t *s_update_btn;             // Update notification button
+#if !defined(RK_CUSTOM_VALVE_FIRMWARE)
 static char s_update_version[32] = "";     // Available update version
+#endif
 static int s_update_progress = -1;         // Update download progress (-1 = not updating)
 
 // State management
@@ -1376,13 +1378,20 @@ void ui_zone_picker_scroll(int delta) {
 #include "ota_update.h"
 #endif
 
+#if !defined(RK_CUSTOM_VALVE_FIRMWARE)
 static void update_btn_clicked(lv_event_t *e) {
     (void)e;
     ESP_LOGI(UI_TAG, "Update button clicked");
     ui_trigger_update();
 }
 
+#endif
+
 void ui_set_update_available(const char *version) {
+#ifdef RK_CUSTOM_VALVE_FIRMWARE
+    (void)version;
+    return;
+#else
     if (version && version[0]) {
         strncpy(s_update_version, version, sizeof(s_update_version) - 1);
         s_update_version[sizeof(s_update_version) - 1] = '\0';
@@ -1422,6 +1431,7 @@ void ui_set_update_available(const char *version) {
             lv_obj_add_flag(s_update_btn, LV_OBJ_FLAG_HIDDEN);
         }
     }
+#endif
 }
 
 void ui_set_update_progress(int percent) {
@@ -1446,11 +1456,11 @@ void ui_set_update_progress(int percent) {
 }
 
 void ui_trigger_update(void) {
-#ifdef ESP_PLATFORM
+#if defined(ESP_PLATFORM) && !defined(RK_CUSTOM_VALVE_FIRMWARE)
     ESP_LOGI(UI_TAG, "Triggering OTA update");
     ota_start_update();
 #else
-    ESP_LOGI(UI_TAG, "OTA update not available on PC simulator");
+    ESP_LOGI(UI_TAG, "OTA update disabled for this build");
 #endif
 }
 
