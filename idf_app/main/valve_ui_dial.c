@@ -197,12 +197,13 @@ void valve_ui_process(uint32_t now_ms, bool awake) {
         }
     }
     fail_closed_overflow(now_ms);
-    if (awake && s_connected && now_ms - s_last_get >= POLL_MS) request_get(now_ms);
-    if (s_gate.pending && now_ms - s_pending_since >= STALE_MS)
+    uint32_t current_ms = monotonic_ms();
+    if (awake && s_connected && current_ms - s_last_get >= POLL_MS) request_get(current_ms);
+    if (s_gate.pending && current_ms - s_pending_since >= STALE_MS)
         valve_ui_set_unknown("Request timed out");
-    if (s_status.state != VALVE_UNKNOWN && now_ms - s_status_at >= STALE_MS)
+    if (s_status.state != VALVE_UNKNOWN && current_ms - s_status_at >= STALE_MS)
         valve_ui_set_unknown("Status stale");
-    render(monotonic_ms());
+    render(current_ms);
 }
 void valve_ui_touch(int x, int y, bool pressed, bool moved, uint32_t now_ms) {
     bool supply_area = x >= 45 && x <= 315 && y >= 172 && y <= 232;

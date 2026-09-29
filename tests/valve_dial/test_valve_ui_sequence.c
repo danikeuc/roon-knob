@@ -86,7 +86,8 @@ int main(void) {
     valve_ui_show(true);
     uint32_t initial = next_id;
     emit(initial, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
-    process();
+    /* Worker receipt can occur after ui_loop_task captured its entry time. */
+    valve_ui_process(fake_now - 1, true);
     assert(strcmp(objects[2].text, "DRAIN (0)") == 0);
     assert(!(objects[4].state & LV_STATE_DISABLED));
     valve_ui_wake();
