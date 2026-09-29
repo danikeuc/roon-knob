@@ -2,28 +2,70 @@
 #include "valve_config_dial.h"
 #include <stdio.h>
 #include <string.h>
+#ifndef VALVE_CLIENT_HOST_TEST
+#include <esp_http_client.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/task.h>
+#endif
 
 #define RESPONSE_CAP 2048
 #define STATUS_ROUTE "/api/v1/display/status"
 #define START_ROUTE "/api/v1/display/actions/timed-shower"
 #define DRAIN_ROUTE "/api/v1/display/actions/drain"
 
+typedef struct work_item {
+    bool post;
+    valve_action_t action;
+    uint32_t session;
+} work_item_t;
+static bool s_connected;
+static uint32_t s_session;
+#ifndef VALVE_CLIENT_HOST_TEST
+static portMUX_TYPE s_session_lock = portMUX_INITIALIZER_UNLOCKED;
+#endif
+static bool session_snapshot(uint32_t *session) {
+#ifndef VALVE_CLIENT_HOST_TEST
+    portENTER_CRITICAL(&s_session_lock);
+#endif
+    bool connected = s_connected;
+    *session = s_session;
+#ifndef VALVE_CLIENT_HOST_TEST
+    portEXIT_CRITICAL(&s_session_lock);
+#endif
+    return connected;
+}
+static void session_change(bool connected) {
+#ifndef VALVE_CLIENT_HOST_TEST
+    portENTER_CRITICAL(&s_session_lock);
+#endif
+    s_connected = connected;
+    s_session++;
+#ifndef VALVE_CLIENT_HOST_TEST
+    portEXIT_CRITICAL(&s_session_lock);
+#endif
+}
+static valve_client_callback_fn s_callback;
+static void *s_callback_context;
+
+static bool post_allowed(const work_item_t *item) {
+    uint32_t current;
+    return session_snapshot(&current) && item->session == current;
+}
+
 #ifdef VALVE_CLIENT_HOST_TEST
 static valve_client_transport_fn s_transport;
 static void *s_transport_context;
 static bool s_pending_get;
+static struct work_item s_host_queue[8];
+static unsigned s_host_head, s_host_count;
 void valve_client_test_transport(valve_client_transport_fn transport, void *context) {
     s_transport = transport; s_transport_context = context;
 }
 #else
-#include <esp_http_client.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/queue.h>
-#include <freertos/task.h>
 static QueueHandle_t s_queue;
 static TaskHandle_t s_worker;
-static valve_client_callback_fn s_callback;
-static void *s_callback_context;
+
 static int esp_transport(const char *method, const char *url, const char *token,
                          int *http_status, char *response, size_t cap,
                          size_t *response_len, void *context) {
@@ -117,31 +159,80 @@ valve_client_result_t valve_client_post(valve_action_t action, valve_status_t *o
 #endif
     return result;
 }
-#ifdef VALVE_CLIENT_HOST_TEST
-void valve_client_on_reconnect(void) { s_pending_get = true; }
-void valve_client_test_run_pending(void) {
-    if (s_pending_get) { s_pending_get = false; valve_status_t status; (void)valve_client_get_status(&status); }
+static void dispatch(const work_item_t *work) {
+    if (work->post && !post_allowed(work)) return;
+    uint32_t current;
+    if (!session_snapshot(&current)) return;
+    valve_status_t status;
+    valve_client_result_t result = work->post ? valve_client_post(work->action, &status)
+                                               : valve_client_get_status(&status);
+    if (s_callback) s_callback(result, &status, s_callback_context);
+    if (work->post && result != VALVE_CLIENT_OK && session_snapshot(&current)) {
+        valve_status_t reconciled;
+        valve_client_result_t check = valve_client_get_status(&reconciled);
+        if (s_callback) s_callback(check, &reconciled, s_callback_context);
+    }
 }
-bool valve_client_start(valve_client_callback_fn callback, void *context) { (void)callback; (void)context; return true; }
-bool valve_client_request_get(void) { s_pending_get = true; return true; }
-bool valve_client_request_post(valve_action_t action) { (void)action; return false; }
+static void clear_queue(void) {
+#ifdef VALVE_CLIENT_HOST_TEST
+    s_host_head = 0;
+    s_host_count = 0;
 #else
-typedef struct { bool post; valve_action_t action; } work_item_t;
+    if (s_queue) xQueueReset(s_queue);
+#endif
+}
+void valve_client_on_disconnect(void) {
+    session_change(false);
+    clear_queue();
+}
+void valve_client_on_reconnect(void) {
+    session_change(false);
+    clear_queue();
+    session_change(true);
+    (void)valve_client_request_get();
+}
+#ifdef VALVE_CLIENT_HOST_TEST
+static bool host_enqueue(work_item_t item) {
+    if (s_host_count >= sizeof s_host_queue / sizeof s_host_queue[0]) return false;
+    s_host_queue[(s_host_head + s_host_count) % 8] = item;
+    s_host_count++;
+    return true;
+}
+void valve_client_test_run_pending(void) {
+    if (s_pending_get) {
+        s_pending_get = false;
+        valve_status_t status;
+        (void)valve_client_get_status(&status);
+    }
+    while (s_host_count) {
+        work_item_t item = s_host_queue[s_host_head];
+        s_host_head = (s_host_head + 1) % 8;
+        s_host_count--;
+        dispatch(&item);
+    }
+}
+bool valve_client_start(valve_client_callback_fn callback, void *context) {
+    s_callback = callback; s_callback_context = context; return true;
+}
+bool valve_client_request_get(void) {
+    uint32_t session;
+    if (!session_snapshot(&session)) return false;
+    return host_enqueue((work_item_t){.post = false, .session = session});
+}
+bool valve_client_request_post(valve_action_t action) {
+    uint32_t session;
+    if (!session_snapshot(&session) ||
+        (action != VALVE_ACTION_START_600S && action != VALVE_ACTION_DRAIN)) return false;
+    return host_enqueue((work_item_t){.post = true, .action = action, .session = session});
+}
+#else
 static void worker_task(void *context) {
     (void)context;
     s_worker = xTaskGetCurrentTaskHandle();
     work_item_t work;
     for (;;) {
         if (xQueueReceive(s_queue, &work, portMAX_DELAY) != pdTRUE) continue;
-        valve_status_t status;
-        valve_client_result_t result = work.post ? valve_client_post(work.action, &status)
-                                                  : valve_client_get_status(&status);
-        if (s_callback) s_callback(result, &status, s_callback_context);
-        if (work.post && result != VALVE_CLIENT_OK) {
-            valve_status_t reconciled;
-            valve_client_result_t check = valve_client_get_status(&reconciled);
-            if (s_callback) s_callback(check, &reconciled, s_callback_context);
-        }
+        dispatch(&work);
     }
 }
 bool valve_client_start(valve_client_callback_fn callback, void *context) {
@@ -155,14 +246,16 @@ bool valve_client_start(valve_client_callback_fn callback, void *context) {
     return true;
 }
 bool valve_client_request_get(void) {
-    if (!s_queue) return false;
-    work_item_t item = {.post = false};
+    uint32_t session;
+    if (!s_queue || !session_snapshot(&session)) return false;
+    work_item_t item = {.post = false, .session = session};
     return xQueueSend(s_queue, &item, 0) == pdTRUE;
 }
 bool valve_client_request_post(valve_action_t action) {
-    if (!s_queue || (action != VALVE_ACTION_START_600S && action != VALVE_ACTION_DRAIN)) return false;
-    work_item_t item = {.post = true, .action = action};
+    uint32_t session;
+    if (!s_queue || !session_snapshot(&session) ||
+        (action != VALVE_ACTION_START_600S && action != VALVE_ACTION_DRAIN)) return false;
+    work_item_t item = {.post = true, .action = action, .session = session};
     return xQueueSend(s_queue, &item, 0) == pdTRUE;
 }
-void valve_client_on_reconnect(void) { (void)valve_client_request_get(); }
 #endif

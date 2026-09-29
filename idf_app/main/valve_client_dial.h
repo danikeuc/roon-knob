@@ -11,12 +11,15 @@ typedef void (*valve_client_callback_fn)(valve_client_result_t result,
                                           const valve_status_t *status, void *context);
 /* Synchronous calls execute only on the client worker task in firmware.
  * Use request_get/request_post from UI tasks. Callback runs on the worker and
- * must hand status to the UI task before touching widgets. */
+ * must copy the status before returning if it needs it later, then hand the
+ * copy to the UI task before touching widgets. The status pointer is valid
+ * only until the callback returns. */
 valve_client_result_t valve_client_get_status(valve_status_t *out);
 valve_client_result_t valve_client_post(valve_action_t action, valve_status_t *out);
 bool valve_client_start(valve_client_callback_fn callback, void *context);
 bool valve_client_request_get(void);
 bool valve_client_request_post(valve_action_t action);
+void valve_client_on_disconnect(void);
 void valve_client_on_reconnect(void);
 #ifdef VALVE_CLIENT_HOST_TEST
 void valve_client_test_transport(valve_client_transport_fn transport, void *context);

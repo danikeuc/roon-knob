@@ -27,6 +27,21 @@ static void parse_cases(void) {
         assert(!valve_status_parse(bad[i], strlen(bad[i]), &s));
         assert(s.state == VALVE_UNKNOWN);
     }
+    const char *nested = "{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"ready\",\"remaining_seconds\":0,\"forecast\":{\"days\":[{\"rain\":true},null,3.5]}}";
+    assert(valve_status_parse(nested, strlen(nested), &s) && s.state == VALVE_DRAIN);
+    const char *extra_bad[] = {
+        "{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"ready\",\"remaining_seconds\":0,\"forecast\":{\"a\":1 \"b\":2}}",
+        "{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"ready\",\"remaining_seconds\":0,\"forecast\":garbage}",
+        "{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"line\nfeed\",\"remaining_seconds\":0}",
+        "{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"ready\",\"remaining_seconds\":00}",
+        "{\"mode\":\"manual_timed\",\"state\":\"TIMED_SHOWER\",\"command\":\"SUPPLY\",\"reason\":\"ready\",\"remaining_seconds\":0}",
+    };
+    for (size_t i = 0; i < sizeof extra_bad / sizeof extra_bad[0]; i++) {
+        assert(!valve_status_parse(extra_bad[i], strlen(extra_bad[i]), &s));
+        assert(s.state == VALVE_UNKNOWN);
+    }
+    const char invalid_utf8[] = "{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"\xC0\xAF\",\"remaining_seconds\":0}";
+    assert(!valve_status_parse(invalid_utf8, strlen(invalid_utf8), &s));
     char huge[2050]; memset(huge, ' ', sizeof huge); memcpy(huge, ready, strlen(ready));
     assert(!valve_status_parse(huge, sizeof huge, &s));
 }
@@ -77,4 +92,29 @@ static void request_cases(void) {
     assert(posts == 2 && gets == 3 && strcmp(trace, "PGGPG") == 0);
     assert(valve_client_post((valve_action_t)99, &s) == VALVE_CLIENT_INVALID && posts == 2);
 }
-int main(void) { parse_cases(); request_cases(); puts("valve parser/client tests passed"); }
+static void callback(valve_client_result_t result, const valve_status_t *status, void *context) {
+    (void)result; (void)status; (void)context;
+}
+static void scheduling_cases(void) {
+    posts = gets = 0; trace[0] = 0; next_status = 200; fail_transport = 0;
+    assert(valve_client_start(callback, NULL));
+    valve_client_on_disconnect();
+    assert(!valve_client_request_post(VALVE_ACTION_START_600S));
+    valve_client_on_reconnect();
+    assert(valve_client_request_post(VALVE_ACTION_START_600S));
+    valve_client_on_disconnect();
+    valve_client_on_reconnect();
+    valve_client_test_run_pending();
+    assert(posts == 0 && gets >= 1);
+    assert(valve_client_request_post(VALVE_ACTION_START_600S));
+    valve_client_test_run_pending();
+    assert(posts == 1 && gets >= 2);
+    posts = gets = 0; trace[0] = 0;
+    valve_client_on_disconnect(); valve_client_on_reconnect(); valve_client_test_run_pending();
+    for (int i = 0; i < 8; i++) assert(valve_client_request_post(VALVE_ACTION_START_600S));
+    gets = 0;
+    valve_client_on_disconnect(); valve_client_on_reconnect();
+    valve_client_test_run_pending();
+    assert(posts == 0 && gets == 1);
+}
+int main(void) { parse_cases(); request_cases(); scheduling_cases(); puts("valve parser/client tests passed"); }

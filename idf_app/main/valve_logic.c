@@ -7,6 +7,120 @@
 #define STATUS_MAX_BYTES 2048
 #define STATUS_MAX_TOKENS 128
 
+typedef struct { const char *text; size_t len; size_t pos; } json_cursor_t;
+static void json_space(json_cursor_t *c) {
+    while (c->pos < c->len && (c->text[c->pos] == ' ' || c->text[c->pos] == '\t' ||
+           c->text[c->pos] == '\n' || c->text[c->pos] == '\r')) c->pos++;
+}
+static bool json_hex(char ch) {
+    return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') ||
+           (ch >= 'A' && ch <= 'F');
+}
+static bool json_utf8(json_cursor_t *c, unsigned char first) {
+    unsigned count;
+    if (first >= 0xC2 && first <= 0xDF) count = 1;
+    else if (first >= 0xE0 && first <= 0xEF) count = 2;
+    else if (first >= 0xF0 && first <= 0xF4) count = 3;
+    else return false;
+    if (c->len - c->pos < count) return false;
+    unsigned char second = (unsigned char)c->text[c->pos];
+    if (second < 0x80 || second > 0xBF) return false;
+    if ((first == 0xE0 && second < 0xA0) || (first == 0xED && second > 0x9F) ||
+        (first == 0xF0 && second < 0x90) || (first == 0xF4 && second > 0x8F)) return false;
+    for (unsigned i = 1; i < count; i++) {
+        unsigned char follow = (unsigned char)c->text[c->pos + i];
+        if (follow < 0x80 || follow > 0xBF) return false;
+    }
+    c->pos += count;
+    return true;
+}
+static bool json_string(json_cursor_t *c) {
+    if (c->pos >= c->len || c->text[c->pos++] != '"') return false;
+    while (c->pos < c->len) {
+        unsigned char ch = (unsigned char)c->text[c->pos++];
+        if (ch == '"') return true;
+        if (ch < 0x20) return false;
+        if (ch >= 0x80 && !json_utf8(c, ch)) return false;
+        if (ch != '\\') continue;
+        if (c->pos >= c->len) return false;
+        char escape = c->text[c->pos++];
+        if (escape && strchr("\"\\/bfnrt", escape)) continue;
+        if (escape != 'u' || c->len - c->pos < 4) return false;
+        for (int i = 0; i < 4; i++) if (!json_hex(c->text[c->pos++])) return false;
+    }
+    return false;
+}
+static bool json_number(json_cursor_t *c) {
+    if (c->pos < c->len && c->text[c->pos] == '-') c->pos++;
+    if (c->pos >= c->len) return false;
+    if (c->text[c->pos] == '0') c->pos++;
+    else if (c->text[c->pos] >= '1' && c->text[c->pos] <= '9') {
+        do { c->pos++; } while (c->pos < c->len && isdigit((unsigned char)c->text[c->pos]));
+    } else return false;
+    if (c->pos < c->len && c->text[c->pos] == '.') {
+        c->pos++;
+        if (c->pos >= c->len || !isdigit((unsigned char)c->text[c->pos])) return false;
+        do { c->pos++; } while (c->pos < c->len && isdigit((unsigned char)c->text[c->pos]));
+    }
+    if (c->pos < c->len && (c->text[c->pos] == 'e' || c->text[c->pos] == 'E')) {
+        c->pos++;
+        if (c->pos < c->len && (c->text[c->pos] == '+' || c->text[c->pos] == '-')) c->pos++;
+        if (c->pos >= c->len || !isdigit((unsigned char)c->text[c->pos])) return false;
+        do { c->pos++; } while (c->pos < c->len && isdigit((unsigned char)c->text[c->pos]));
+    }
+    return true;
+}
+static bool json_value(json_cursor_t *c, unsigned depth);
+static bool json_object(json_cursor_t *c, unsigned depth) {
+    c->pos++; json_space(c);
+    if (c->pos < c->len && c->text[c->pos] == '}') { c->pos++; return true; }
+    for (;;) {
+        if (!json_string(c)) return false;
+        json_space(c);
+        if (c->pos >= c->len || c->text[c->pos++] != ':') return false;
+        if (!json_value(c, depth + 1)) return false;
+        json_space(c);
+        if (c->pos >= c->len) return false;
+        if (c->text[c->pos] == '}') { c->pos++; return true; }
+        if (c->text[c->pos++] != ',') return false;
+        json_space(c);
+    }
+}
+static bool json_array(json_cursor_t *c, unsigned depth) {
+    c->pos++; json_space(c);
+    if (c->pos < c->len && c->text[c->pos] == ']') { c->pos++; return true; }
+    for (;;) {
+        if (!json_value(c, depth + 1)) return false;
+        json_space(c);
+        if (c->pos >= c->len) return false;
+        if (c->text[c->pos] == ']') { c->pos++; return true; }
+        if (c->text[c->pos++] != ',') return false;
+        json_space(c);
+    }
+}
+static bool json_value(json_cursor_t *c, unsigned depth) {
+    if (depth > 16) return false;
+    json_space(c);
+    if (c->pos >= c->len) return false;
+    char ch = c->text[c->pos];
+    if (ch == '{') return json_object(c, depth);
+    if (ch == '[') return json_array(c, depth);
+    if (ch == '"') return json_string(c);
+    const char *literal = ch == 't' ? "true" : ch == 'f' ? "false" : ch == 'n' ? "null" : NULL;
+    if (literal) {
+        size_t n = strlen(literal);
+        if (c->len - c->pos < n || memcmp(c->text + c->pos, literal, n) != 0) return false;
+        c->pos += n; return true;
+    }
+    return json_number(c);
+}
+static bool json_well_formed(const char *json, size_t len) {
+    json_cursor_t c = {.text = json, .len = len, .pos = 0};
+    json_space(&c);
+    if (c.pos >= len || c.text[c.pos] != '{' || !json_value(&c, 0)) return false;
+    json_space(&c);
+    return c.pos == len;
+}
 static bool equal_token(const char *json, const jsmntok_t *tok, const char *value) {
     size_t n = (size_t)(tok->end - tok->start);
     return tok->type == JSMN_STRING && strlen(value) == n &&
@@ -42,7 +156,7 @@ bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
     if (!out) return false;
     memset(out, 0, sizeof *out);
     out->state = VALVE_UNKNOWN;
-    if (!json || len == 0 || len > STATUS_MAX_BYTES) return false;
+    if (!json || len == 0 || len > STATUS_MAX_BYTES || !json_well_formed(json, len)) return false;
     jsmntok_t tokens[STATUS_MAX_TOKENS];
     jsmn_parser parser;
     jsmn_init(&parser);
@@ -96,7 +210,7 @@ bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
         if (!isspace((unsigned char)json[p])) return false;
     if (seen != 31 || !mode) return false;
     if (drain_state && drain_command && remaining == 0) out->state = VALVE_DRAIN;
-    else if (supply_state && supply_command) out->state = VALVE_SUPPLY;
+    else if (supply_state && supply_command && remaining > 0) out->state = VALVE_SUPPLY;
     else return false;
     out->remaining_seconds = remaining;
     memcpy(out->reason, reason, sizeof reason);
