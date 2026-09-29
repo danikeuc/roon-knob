@@ -2,6 +2,7 @@ set(SRC_FILES
     "main_idf.c"
     "captive_portal.c"
     "config_server.c"
+    "valve_config_dial.c"
     "http_server_lifecycle.c"
     "dns_server.c"
     "ui_network.c"

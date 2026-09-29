@@ -2,6 +2,7 @@
 // Access at http://<knob-ip>/ to set bridge URL
 
 #include "config_server.h"
+#include "valve_config_dial.h"
 #include "controller_config.h"
 #include "http_server_lifecycle.h"
 #include "platform/platform_mdns.h"
@@ -81,6 +82,7 @@ static const char *HTML_CONFIG =
     "<h1>HiPhi Dial</h1>"
     "<p class='info'>Configure your HiPhi Dial settings</p>"
     "<p><a href='/ble'>BLE Media Remote settings</a></p>"
+    "<p><a href='/valves-config'>Valve controller settings</a></p>"
     "<div class='current'>"
     "<strong>Current Unified Hi-Fi Control:</strong> %s"
     "</div>"
@@ -346,7 +348,7 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
     buf[received] = '\0';
-    ESP_LOGI(TAG, "Received config: %s", buf);
+    /* This route can receive arbitrary form fields. Never log its raw body. */
 
     // Check if Clear button was pressed
     char action[16] = {0};
@@ -410,6 +412,118 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
     esp_restart();
 
     return ESP_OK;
+}
+
+static const char *HTML_VALVES_CONFIG =
+    "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<title>Valve controller settings</title></head><body>"
+    "<h1>Valve controller settings</h1>"
+    "<p>Enter the Pi LAN base URL and display token. The saved token is never shown here.</p>"
+    "<form method='POST' action='/valves-config'>"
+    "<label>Pi base URL <input type='url' name='pi_url' maxlength='128' required></label>"
+    "<label>Display token <input type='password' name='pi_token' maxlength='128' value='' required></label>"
+    "<button type='submit' name='action' value='save'>Save</button>"
+    "<button type='submit' name='action' value='clear' formnovalidate>Clear</button>"
+    "</form><p><a href='/'>Back to settings</a></p></body></html>";
+
+static esp_err_t valves_config_get_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "text/html");
+    return httpd_resp_sendstr(req, HTML_VALVES_CONFIG);
+}
+
+/* Strict form decoding keeps oversized, duplicate and unexpected fields out of
+ * the storage path. No form value is included in a response or log. */
+static bool decode_form_value(const char *start, size_t len, char *out, size_t capacity) {
+    size_t n = 0;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)start[i];
+        if (c == '+') c = ' ';
+        else if (c == '%') {
+            if (i + 2 >= len) return false;
+            unsigned char hi = (unsigned char)start[++i];
+            unsigned char lo = (unsigned char)start[++i];
+            int h = (hi >= '0' && hi <= '9') ? hi - '0' :
+                    (hi >= 'A' && hi <= 'F') ? hi - 'A' + 10 :
+                    (hi >= 'a' && hi <= 'f') ? hi - 'a' + 10 : -1;
+            int l = (lo >= '0' && lo <= '9') ? lo - '0' :
+                    (lo >= 'A' && lo <= 'F') ? lo - 'A' + 10 :
+                    (lo >= 'a' && lo <= 'f') ? lo - 'a' + 10 : -1;
+            if (h < 0 || l < 0) return false;
+            c = (unsigned char)((h << 4) | l);
+        }
+        if (c == 0 || n + 1 >= capacity) return false;
+        out[n++] = (char)c;
+    }
+    out[n] = '\0';
+    return true;
+}
+
+static bool parse_valves_form(char *body, char *url, char *token, char *action) {
+    bool seen_url = false, seen_token = false, seen_action = false;
+    char *item = body;
+    while (*item) {
+        char *amp = strchr(item, '&');
+        if (amp) *amp = '\0';
+        char *eq = strchr(item, '=');
+        if (!eq) return false;
+        *eq = '\0';
+        const char *value = eq + 1;
+        size_t len = strlen(value);
+        if (strcmp(item, "pi_url") == 0 && !seen_url) {
+            seen_url = decode_form_value(value, len, url, VALVE_CONFIG_URL_LEN);
+            if (!seen_url) return false;
+        } else if (strcmp(item, "pi_token") == 0 && !seen_token) {
+            seen_token = decode_form_value(value, len, token, VALVE_CONFIG_TOKEN_LEN);
+            if (!seen_token) return false;
+        } else if (strcmp(item, "action") == 0 && !seen_action) {
+            seen_action = decode_form_value(value, len, action, 8);
+            if (!seen_action) return false;
+        } else return false;
+        item = amp ? amp + 1 : item + strlen(item);
+    }
+    return seen_action && (strcmp(action, "clear") == 0 ||
+                           (strcmp(action, "save") == 0 && seen_url && seen_token));
+}
+
+static esp_err_t valves_config_post_handler(httpd_req_t *req) {
+    char body[1025] = {0};
+    char url[VALVE_CONFIG_URL_LEN] = {0};
+    char token[VALVE_CONFIG_TOKEN_LEN] = {0};
+    char action[8] = {0};
+    esp_err_t result = ESP_FAIL;
+    if (req->content_len <= 0 || req->content_len >= sizeof(body)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid form");
+        goto done;
+    }
+    size_t received = 0;
+    while (received < (size_t)req->content_len) {
+        int count = httpd_req_recv(req, body + received,
+                                  (size_t)req->content_len - received);
+        if (count <= 0) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid form");
+            goto done;
+        }
+        received += (size_t)count;
+    }
+    body[received] = '\0';
+    if (strlen(body) != received || !parse_valves_form(body, url, token, action)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid form");
+        goto done;
+    }
+    bool saved = strcmp(action, "clear") == 0 ? valve_config_clear() :
+                 valve_config_save(url, token);
+    if (!saved) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                            "Settings rejected or could not be verified");
+        goto done;
+    }
+    httpd_resp_set_status(req, "303 See Other");
+    httpd_resp_set_hdr(req, "Location", "/valves-config");
+    result = httpd_resp_sendstr(req, "Settings updated");
+done:
+    memset(token, 0, sizeof(token));
+    memset(body, 0, sizeof(body));
+    return result;
 }
 
 static esp_err_t wifi_add_handler(httpd_req_t *req) {
@@ -871,6 +985,20 @@ void config_server_start(void) {
         .handler = config_post_handler,
     };
     httpd_register_uri_handler(s_server, &config_post);
+
+    httpd_uri_t valves_config_get = {
+        .uri = "/valves-config",
+        .method = HTTP_GET,
+        .handler = valves_config_get_handler,
+    };
+    httpd_register_uri_handler(s_server, &valves_config_get);
+
+    httpd_uri_t valves_config_post = {
+        .uri = "/valves-config",
+        .method = HTTP_POST,
+        .handler = valves_config_post_handler,
+    };
+    httpd_register_uri_handler(s_server, &valves_config_post);
 
     httpd_uri_t wifi_add = {
         .uri = "/wifi-add",
