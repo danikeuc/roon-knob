@@ -14,6 +14,7 @@ typedef struct {
     valve_status_t status;
     uint32_t request_id;
     uint32_t session;
+    uint32_t config_generation;
     valve_client_event_kind_t kind;
 } valve_client_event_t;
 typedef void (*valve_client_callback_fn)(const valve_client_event_t *event, void *context);
@@ -30,6 +31,8 @@ bool valve_client_request_get(void);
 bool valve_client_request_post(valve_action_t action);
 bool valve_client_request_get_tagged(uint32_t *request_id);
 bool valve_client_request_post_tagged(valve_action_t action, uint32_t *request_id);
+/* UI authorization belongs to the generation of the displayed status. */
+bool valve_client_request_post_for_config(valve_action_t action, uint32_t generation, uint32_t *request_id);
 uint32_t valve_client_current_session(void);
 void valve_client_on_disconnect(void);
 void valve_client_on_reconnect(void);

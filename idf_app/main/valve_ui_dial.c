@@ -29,6 +29,14 @@ static uint32_t s_pending_since;
 static valve_observation_gate_t s_gate;
 static bool s_recovery_needed;
 static bool s_touch_moved;
+static uint32_t s_config_generation;
+static bool s_config_observed;
+static void consume_touch(void) {
+    if (!s_touch_target_initialized) return;
+    s_touch_supply = s_touch_drain = false;
+    s_touch_moved = true;
+    (void)valve_hold_update(&s_hold, true, true, 0);
+}
 
 static uint32_t monotonic_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 static void completion_cb(const valve_client_event_t *event, void *context) {
@@ -41,7 +49,8 @@ static void completion_cb(const valve_client_event_t *event, void *context) {
 }
 
 static bool fresh(uint32_t now_ms) {
-    return !s_gate.pending && s_status.state != VALVE_UNKNOWN &&
+    return s_config_generation == valve_config_generation() &&
+           !(s_config_generation & 1u) && !s_gate.pending && s_status.state != VALVE_UNKNOWN &&
            now_ms - s_status_at < STALE_MS;
 }
 static void render(uint32_t now_ms) {
@@ -67,7 +76,7 @@ static void render(uint32_t now_ms) {
                                         current ? now_ms - s_status_at : STALE_MS);
     if (supply) lv_obj_clear_state(s_supply, LV_STATE_DISABLED);
     else lv_obj_add_state(s_supply, LV_STATE_DISABLED);
-    if (valve_drain_allowed(s_configured, s_connected))
+    if (valve_drain_allowed(s_configured && s_config_observed, s_connected))
         lv_obj_clear_state(s_drain, LV_STATE_DISABLED);
     else lv_obj_add_state(s_drain, LV_STATE_DISABLED);
     ui_set_valve_active(current && s_status.state == VALVE_SUPPLY);
@@ -79,13 +88,14 @@ static void request_get(uint32_t now_ms) {
         valve_gate_overflow(&s_gate, request_id);
 }
 static void request_action(valve_action_t action) {
+    if (!s_config_observed) return;
     uint32_t now_ms = monotonic_ms();
     s_gate.pending = true;
     s_pending_since = now_ms;
     s_status.state = VALVE_UNKNOWN;
     ui_set_valve_active(false);
     uint32_t request_id;
-    if (!valve_client_request_post_tagged(action, &request_id)) {
+    if (!valve_client_request_post_for_config(action, s_config_generation, &request_id)) {
         valve_ui_set_unknown("Request unavailable");
         request_get(now_ms);
     } else {
@@ -97,6 +107,7 @@ void valve_ui_init(void) {
     char url[VALVE_CONFIG_URL_LEN], token[VALVE_CONFIG_TOKEN_LEN];
     s_configured = valve_config_load(url, sizeof url, token, sizeof token);
     memset(token, 0, sizeof token);
+    s_config_generation = valve_config_generation();
     s_status.state = VALVE_UNKNOWN;
     valve_gate_link(&s_gate, valve_client_current_session());
     s_overlay = lv_obj_create(lv_screen_active());
@@ -156,7 +167,7 @@ void valve_ui_set_unknown(const char *reason) {
     (void)reason;
     s_status.state = VALVE_UNKNOWN;
     s_gate.pending = false;
-    valve_ui_cancel_touch();
+    consume_touch();
     render(monotonic_ms());
 }
 static void fail_closed_overflow(uint32_t now_ms) {
@@ -169,6 +180,20 @@ static void fail_closed_overflow(uint32_t now_ms) {
     request_get(now_ms);
 }
 void valve_ui_process(uint32_t now_ms, bool awake) {
+    uint32_t generation = valve_config_generation();
+    if (generation != s_config_generation) {
+        s_config_generation = generation;
+        s_config_observed = false;
+        valve_ui_set_unknown("Configuration changed");
+        valve_gate_link(&s_gate, valve_client_current_session());
+        s_recovery_needed = false;
+        char url[VALVE_CONFIG_URL_LEN], token[VALVE_CONFIG_TOKEN_LEN];
+        s_configured = !(generation & 1u) &&
+            valve_config_load(url, sizeof url, token, sizeof token) &&
+            generation == valve_config_generation();
+        memset(token, 0, sizeof token);
+        if (s_configured) request_get(now_ms);
+    }
     bool connected = atomic_load(&s_connected);
     unsigned epoch = atomic_load(&s_link_epoch);
     if (epoch != s_processed_epoch) {
@@ -182,19 +207,22 @@ void valve_ui_process(uint32_t now_ms, bool awake) {
     completion_t completion;
     while (s_completions && xQueueReceive(s_completions, &completion, 0) == pdTRUE) {
         const valve_client_event_t *event = &completion.event;
-        if (!connected || event->session != valve_client_current_session()) continue;
+        if (!connected || event->session != valve_client_current_session() ||
+            event->config_generation != s_config_generation ||
+            s_config_generation != valve_config_generation()) continue;
         uint32_t received_age_ms = monotonic_ms() - completion.received_at_ms;
         bool valid = event->result == VALVE_CLIENT_OK &&
                      event->status.state != VALVE_UNKNOWN &&
                      received_age_ms < STALE_MS;
         if (valve_gate_accept(&s_gate, event->session, event->request_id, valid)) {
+            s_config_observed = true;
             s_status = event->status;
             s_status_at = completion.received_at_ms;
             s_recovery_needed = false;
         } else if (event->request_id >= s_gate.minimum_request_id &&
                    event->session == s_gate.session && !valid) {
             s_status.state = VALVE_UNKNOWN;
-            valve_ui_cancel_touch();
+            consume_touch();
         }
     }
     fail_closed_overflow(now_ms);
@@ -207,6 +235,11 @@ void valve_ui_process(uint32_t now_ms, bool awake) {
     render(current_ms);
 }
 void valve_ui_touch(int x, int y, bool pressed, bool moved, uint32_t now_ms) {
+    if (s_config_generation != valve_config_generation() || (s_config_generation & 1u)) {
+        if (pressed) { s_touch_target_initialized = true; consume_touch(); }
+        else valve_ui_cancel_touch();
+        return;
+    }
     bool supply_area = x >= 45 && x <= 315 && y >= 172 && y <= 232;
     bool drain_area = x >= 45 && x <= 315 && y >= 250 && y <= 310;
     if (!pressed) {

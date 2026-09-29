@@ -46,11 +46,14 @@ static void parse_cases(void) {
     assert(!valve_status_parse(huge, sizeof huge, &s));
 }
 
+static uint32_t config_generation;
+uint32_t valve_config_generation(void) { return config_generation; }
 bool valve_config_load(char *url, size_t ul, char *token, size_t tl) {
     assert(ul >= 32 && tl >= 32);
     strcpy(url, "http://192.0.2.10:8081"); strcpy(token, "private-test-token"); return true;
 }
 static int next_status = 200, posts, gets, fail_transport, disconnect_during_request;
+static int change_config_during_request;
 static int reconnect_on_get, callbacks, recovery_callbacks;
 static char trace[256];
 static int mock_transport(const char *method, const char *url, const char *token,
@@ -73,6 +76,9 @@ static int mock_transport(const char *method, const char *url, const char *token
         reconnect_on_get = 0;
         valve_client_on_disconnect();
         valve_client_on_reconnect();
+    }
+    if (change_config_during_request) {
+        change_config_during_request = 0; config_generation += 2;
     }
     if (fail_transport) return -3;
     *status = next_status;
@@ -230,4 +236,27 @@ static void dial_cases(void) {
     assert(valve_touch_coordinate(180, 0) == 180);
     assert(valve_touch_coordinate(70, 180) == 289);
 }
-int main(void) { parse_cases(); request_cases(); scheduling_cases(); completion_order_cases(); recovery_session_cases(); dial_cases(); puts("valve parser/client tests passed"); }
+static void config_change_cases(void) {
+    valve_client_on_reconnect(); valve_client_test_run_pending();
+    posts = gets = callbacks = 0;
+    assert(valve_client_request_post(VALVE_ACTION_START_600S));
+    config_generation += 2;
+    valve_client_test_run_pending();
+    assert(posts == 0 && gets == 0 && callbacks == 0);
+    assert(!valve_client_request_post_for_config(VALVE_ACTION_START_600S, config_generation - 2, NULL));
+    /* A config mutation inside POST must not trigger GET using new credentials. */
+    change_config_during_request = 1;
+    assert(valve_client_request_post(VALVE_ACTION_START_600S));
+    valve_client_test_run_pending();
+    assert(posts == 1 && gets == 0 && callbacks == 0);
+    change_config_during_request = 1;
+    assert(valve_client_request_get());
+    valve_client_test_run_pending();
+    assert(gets == 1 && callbacks == 0);
+    /* An odd generation represents save/clear still in progress. */
+    config_generation++;
+    assert(!valve_client_request_get());
+    assert(!valve_client_request_post(VALVE_ACTION_DRAIN));
+    config_generation++;
+}
+int main(void) { parse_cases(); request_cases(); scheduling_cases(); completion_order_cases(); recovery_session_cases(); dial_cases(); config_change_cases(); puts("valve parser/client tests passed"); }

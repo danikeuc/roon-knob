@@ -72,6 +72,8 @@ static unsigned start_posts, drain_posts, bridge_posts;
 static bool pi_online = true, bridge_playing;
 static uint32_t pi_deadline_ms;
 static char request_trace[128];
+static uint32_t config_generation;
+uint32_t valve_config_generation(void) { return config_generation; }
 bool valve_config_load(char *url, size_t ul, char *token, size_t tl) {
     assert(ul > 25 && tl > strlen(secret));
     strcpy(url, "http://fake-pi:8081");

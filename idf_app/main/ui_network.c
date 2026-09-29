@@ -521,7 +521,8 @@ void ui_hide_settings(void) {
 }
 
 bool ui_is_settings_visible(void) {
-    return s_widgets.panel && !lv_obj_has_flag(s_widgets.panel, LV_OBJ_FLAG_HIDDEN);
+    return s_reset_confirm_dialog ||
+           (s_widgets.panel && !lv_obj_has_flag(s_widgets.panel, LV_OBJ_FLAG_HIDDEN));
 }
 
 #else

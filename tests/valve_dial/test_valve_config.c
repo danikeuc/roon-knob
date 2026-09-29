@@ -178,7 +178,20 @@ static void test_interrupted_update_never_loads_mixed_pair(void) {
     assert(!valve_config_load(url, sizeof(url), token, sizeof(token)));
 }
 
+static void test_generation_boundaries(void) {
+    fake_nvs_reset();
+    uint32_t generation = valve_config_generation();
+    assert(!(generation & 1u));
+    assert(valve_config_save("http://old-pi:8081", "placeholder"));
+    assert(valve_config_generation() == generation + 2);
+    fail_set_at = set_count + 1;
+    assert(!valve_config_save("http://new-pi:8081", "placeholder"));
+    assert(valve_config_generation() == generation + 4);
+    assert(valve_config_clear());
+    assert(valve_config_generation() == generation + 6);
+}
 int main(void) {
+    test_generation_boundaries();
     test_round_trip();
     test_rejections();
     test_corruption_and_readback();

@@ -60,6 +60,8 @@ void lv_obj_add_state(lv_obj_t *o, unsigned s) { o->state |= s; }
 void lv_obj_clear_state(lv_obj_t *o, unsigned s) { o->state &= ~s; }
 int lv_color_hex(unsigned c) { return (int)c; }
 void ui_set_valve_active(bool active) { valve_indicator = active; }
+static uint32_t config_generation;
+uint32_t valve_config_generation(void) { return config_generation; }
 bool valve_config_load(char *url, size_t ul, char *token, size_t tl) {
     assert(ul > 25 && tl > 10); strcpy(url, "http://192.0.2.10:8081"); strcpy(token, "test-token"); return true;
 }
@@ -71,11 +73,14 @@ bool valve_client_request_post_tagged(valve_action_t action, uint32_t *id) {
     assert(action == VALVE_ACTION_START_600S || action == VALVE_ACTION_DRAIN);
     posts++; next_id++; if (id) *id = next_id; return true;
 }
+bool valve_client_request_post_for_config(valve_action_t action, uint32_t generation, uint32_t *id) {
+    return generation == config_generation && valve_client_request_post_tagged(action, id);
+}
 uint32_t valve_client_current_session(void) { return session; }
 static void emit(uint32_t id, uint32_t origin_session, valve_client_event_kind_t kind,
                  valve_client_result_t result, valve_state_t state) {
     valve_client_event_t event = {.request_id = id, .session = origin_session, .kind = kind,
-                                  .result = result, .status = {.state = state, .remaining_seconds = state == VALVE_SUPPLY ? 600 : 0}};
+                                  .config_generation = config_generation, .result = result, .status = {.state = state, .remaining_seconds = state == VALVE_SUPPLY ? 600 : 0}};
     client_callback(&event, client_context);
 }
 static void process(void) { valve_ui_process(fake_now, true); }
@@ -116,6 +121,26 @@ int main(void) {
     emit(drain_action, session, VALVE_CLIENT_EVENT_RECOVERY_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
     process();
     assert(strcmp(objects[2].text, "DRAIN (0)") == 0);
+    /* A failed hold remains consumed across recovery until physical release. */
+    valve_ui_touch(100, 180, true, false, fake_now);
+    fake_now += 2000; valve_ui_touch(100, 180, true, false, fake_now);
+    assert(posts == 3);
+    emit(next_id, session, VALVE_CLIENT_EVENT_POST_STATUS, VALVE_CLIENT_TIMEOUT, VALVE_UNKNOWN);
+    process();
+    emit(next_id, session, VALVE_CLIENT_EVENT_RECOVERY_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
+    process();
+    valve_ui_touch(100, 180, true, false, fake_now);
+    fake_now += 2000; valve_ui_touch(100, 180, true, false, fake_now);
+    assert(posts == 3);
+    session++; valve_ui_connected(false); process();
+    session++; valve_ui_connected(true); process();
+    valve_ui_wake();
+    emit(next_id, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
+    process();
+    valve_ui_touch(100, 180, true, false, fake_now);
+    fake_now += 2000; valve_ui_touch(100, 180, true, false, fake_now);
+    assert(posts == 3);
+    valve_ui_touch(100, 180, false, false, fake_now);
     for (int i = 0; i < 4; i++) {
         assert(valve_client_request_get_tagged(NULL));
         emit(next_id, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
@@ -142,6 +167,23 @@ int main(void) {
     emit(next_id, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
     process();
     assert(strcmp(objects[2].text, "DRAIN (0)") == 0);
+    /* Config changes during a hold and while an old response is queued. */
+    valve_ui_touch(100, 180, true, false, fake_now);
+    int before_change = posts;
+    emit(next_id, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
+    config_generation += 2;
+    fake_now += 2000;
+    valve_ui_touch(100, 180, true, false, fake_now); /* before next UI process */
+    assert(posts == before_change);
+    process();
+    assert(strcmp(objects[2].text, "UNKNOWN / FAULT") == 0);
+    assert(objects[6].state & LV_STATE_DISABLED); /* DRAIN waits for new config observation. */
+    emit(next_id, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
+    process();
+    valve_ui_touch(100, 180, true, false, fake_now);
+    fake_now += 2000; valve_ui_touch(100, 180, true, false, fake_now);
+    assert(posts == before_change);
+    valve_ui_touch(100, 180, false, false, fake_now);
     fake_now += 11000;
     process();
     assert(strcmp(objects[2].text, "UNKNOWN / FAULT") == 0);

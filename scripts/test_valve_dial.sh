@@ -95,3 +95,5 @@ trigger = shared.split('void ui_trigger_update(void) {', 1)[1].split('// ===', 1
 assert '#if defined(ESP_PLATFORM) && !defined(RK_CUSTOM_VALVE_FIRMWARE)' in trigger
 assert trigger.index('#if defined(ESP_PLATFORM) && !defined(RK_CUSTOM_VALVE_FIRMWARE)') < trigger.index('ota_start_update();') < trigger.index('#else')
 PY_GATE
+
+python3 tests/valve_dial/test_settings_gesture.py

@@ -1,6 +1,10 @@
 #include "valve_config_dial.h"
 
 #include <string.h>
+#include <stdatomic.h>
+
+static atomic_uint s_generation;
+uint32_t valve_config_generation(void) { return atomic_load(&s_generation); }
 
 #ifndef VALVE_CONFIG_HOST_TEST
 #include <nvs.h>
@@ -160,7 +164,7 @@ bool valve_config_load(char *base_url, size_t url_len, char *token, size_t token
     return ok;
 }
 
-bool valve_config_save(const char *base_url, const char *token) {
+static bool config_save(const char *base_url, const char *token) {
     if (!valid_url(base_url) || !valid_token(token) || !store_invalidate() ||
         !store_stage(base_url, token))
         return false;
@@ -182,7 +186,7 @@ bool valve_config_save(const char *base_url, const char *token) {
     return ok;
 }
 
-bool valve_config_clear(void) {
+static bool config_clear(void) {
     if (!store_clear()) return false;
     char url[VALVE_CONFIG_URL_LEN] = {0};
     char token[VALVE_CONFIG_TOKEN_LEN] = {0};
@@ -190,4 +194,24 @@ bool valve_config_clear(void) {
                    url[0] == '\0' && token[0] == '\0';
     memset(token, 0, sizeof(token));
     return cleared;
+}
+
+/* Serialize writers and invalidate observations before any storage mutation,
+ * including a failed save that has already removed the old seal. */
+static bool begin_change(void) {
+    unsigned generation = atomic_load(&s_generation);
+    return !(generation & 1u) &&
+           atomic_compare_exchange_strong(&s_generation, &generation, generation + 1);
+}
+bool valve_config_save(const char *url, const char *token) {
+    if (!begin_change()) return false;
+    bool ok = config_save(url, token);
+    atomic_fetch_add(&s_generation, 1);
+    return ok;
+}
+bool valve_config_clear(void) {
+    if (!begin_change()) return false;
+    bool ok = config_clear();
+    atomic_fetch_add(&s_generation, 1);
+    return ok;
 }
