@@ -1,6 +1,11 @@
 #pragma once
 
-#include <esp_http_server.h>
+#include <esp_err.h>
+
+/* httpd_req_t and httpd_handle_t are spelled out here (they are
+ * `struct httpd_req` and `void *` in esp_http_server.h) so this header can be
+ * included by code that is built without ESP-IDF's HTTP server. */
+struct httpd_req;
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,11 +31,11 @@ void portal_trace_reset(void);
 void portal_trace_dump(const char *why);
 
 /* Record an HTTP request as "<Host><URI>". */
-void portal_trace_req(httpd_req_t *req);
+void portal_trace_req(struct httpd_req *req);
 
 /* httpd open_fn/close_fn hooks.  close_fn owns closing the socket. */
-esp_err_t portal_trace_open(httpd_handle_t hd, int sockfd);
-void portal_trace_close(httpd_handle_t hd, int sockfd);
+esp_err_t portal_trace_open(void *hd, int sockfd);
+void portal_trace_close(void *hd, int sockfd);
 
 #ifdef __cplusplus
 }

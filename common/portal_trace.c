@@ -1,5 +1,6 @@
 #include "portal_trace.h"
 
+#include <esp_http_server.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -77,19 +78,19 @@ void portal_trace_dump(const char *why) {
     }
 }
 
-void portal_trace_req(httpd_req_t *req) {
+void portal_trace_req(struct httpd_req *req) {
     char host[24] = "";
     (void)httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host));
     portal_trace('H', "%.20s%.22s", host, req->uri);
 }
 
-esp_err_t portal_trace_open(httpd_handle_t hd, int sockfd) {
+esp_err_t portal_trace_open(void *hd, int sockfd) {
     (void)hd;
     portal_trace('O', "fd %d", sockfd);
     return ESP_OK;
 }
 
-void portal_trace_close(httpd_handle_t hd, int sockfd) {
+void portal_trace_close(void *hd, int sockfd) {
     (void)hd;
     portal_trace('C', "fd %d", sockfd);
     /* Setting close_fn replaces httpd's own close(), so we must do it. */
