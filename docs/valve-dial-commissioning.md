@@ -12,6 +12,12 @@ Run `PATH=/tmp/knob-bin:$PATH ./scripts/test_valve_dial.sh`, `bash /tmp/knob-idf
 
 The custom firmware has no bridge OTA check or update action. Configure the bridge deployment with `FIRMWARE_AUTO_UPDATE=false` so it does not auto-download upstream roon-knob images. Roon control continues through the existing bridge; valve requests go directly to the Pi. Future remote firmware updates require a dedicated controlled image feed, signature verification, rollback design, and a separate review and physical test.
 
+## Shower-symbol UI candidate: 2026-09-30
+
+Commit `3683b9bbbe3c77855a874e7f07b981e6851046d2` on `codex/valve-shower-ui` replaces the technical two-button valve page with the approved shower presentation. DRAIN shows the rain-shower head without water dots, a separate snowflake, outlined paired-relay status, `OFF`, and a 2-second `10 MIN` action. SUPPLY shows the water-dot grid, hides the snowflake, fills the paired-relay status, shows `ON`, and puts the Pi-derived remaining time in the action button. Unknown or stale state shows `FAULT` and `Status unavailable`; the sole available action remains a deliberate DRAIN. The UI does not claim physical relay or valve position.
+
+The full valve host suite passed with a temporary Zig 0.13.0 C compiler after first failing on the old `DRAIN (0)` presentation. The sequence and mock integration tests cover the DRAIN/SUPPLY water-dot and snowflake visibility, 2-second SUPPLY hold, immediate DRAIN, 600-second server interval, Pi countdown correction, unknown-state DRAIN-only behavior, reconnect, stale responses, configuration changes, Roon routing, and token redaction. `git diff --check` also passed. ESP-IDF 5.5.5 built source commit `d63e6f71ff304e0d95b2439c441dd2d13c5f3d99`; `idf_app/build/hiphi_dial.bin` is `0x1fb920` bytes with SHA-256 `50f7b5163eefe733c98d22d997249d0ba2e280ec84394fd6f7f066a65e8e121b`, leaving `0x846e0` bytes free (21%) in the smallest application partition. The artifact has not been flashed, so display geometry, colors, touch feel, boot stability, and hardware behavior remain `NOT_VERIFIED` for this candidate.
+
 ## First physical session
 
 1. Keep the **24 V valve supply disconnected**. Record the exact firmware SHA and binary hash, flash that binary over USB, and observe a sustained boot with version and Wi-Fi logs that contain no Pi token.
@@ -32,3 +38,33 @@ A single physical encoder detent changed the live Sauna Roon volume from -35 dB 
 Commit `3b526fad42a40f1c32b7c2d38509385b621c4cdd` raises the `valve_http` stack to 12 KiB, uses that named size at task creation, and records the stack high-water mark after requests. The regression gate first failed against the 6144-byte implementation and passed after the change. `PATH=/tmp/knob-bin:$PATH ./scripts/test_valve_dial.sh`, `bash /tmp/knob-idf-build.sh`, and `git diff --check` all passed. ESP-IDF 5.5.5 produced a `0x1fb2c0`-byte application with SHA-256 `66624aa234280d68ffc0192b73b42ed317ba963836bab5456d6dfecbc3fbb6ad`; the smallest application partition retained `0x84d40` bytes free (21%).
 
 The corrected bootloader, partition table, initial OTA data, and application were flashed to the same MAC and read back with esptool 5.3.1; all four digests matched. Two clean hardware boots restored Wi-Fi, the Sauna zone, and artwork. During the second 50-second serial run, repeated valve status requests reduced the observed free-stack watermark from 6472 to 6280 and finally 6136 bytes, with no overflow, reset, or fault. A single physical encoder detent on the corrected image changed Sauna from -37 dB to -36 dB; bridge readback confirmed -36 dB and the dial HTTP server still returned 200 afterward. A passive serial capture then recorded the physical play-button callbacks while bridge readback confirmed the Sauna zone first in `playing` and finally back in `paused`, still at -36 dB. The dial continued to return HTTP 200 and did not reset. The 24 V valve supply remained disconnected throughout.
+
+## Shower-symbol physical evidence: 2026-09-30
+
+At `2026-09-30T23:15:13+02:00`, the shower-symbol candidate from branch head `116e14602bf5b3c6af8a3c23b863b3f349856a59` was tested on the same Waveshare ESP32-S3, MAC `d0:cf:13:1e:15:44`, with the 24 V valve supply disconnected. The flashed application `idf_app/build/hiphi_dial.bin` was `0x1fb920` bytes with SHA-256 `50f7b5163eefe733c98d22d997249d0ba2e280ec84394fd6f7f066a65e8e121b`. Esptool 4.12.0 wrote the bootloader, partition table, initial OTA data, and application; a separate `verify_flash` pass reported `digest matched` for all four segments.
+
+A 60-second serial observation recorded ESP-IDF 5.5.5 boot, display and CST816 touch initialization, restored Wi-Fi configuration, IP `192.168.114.173`, the Sauna Roon zone, artwork retrieval, and `6476/12288` bytes free at the first reported `valve_http` stack high-water mark. No stack-overflow, panic, abort, brownout, or Guru Meditation marker appeared in 281 captured lines. The dial HTTP root returned 200 after boot. No captured line was removed by the token/password redaction filter.
+
+The user physically observed the DRAIN page with the approved shower head without water dots, snowflake, paired-relay `OFF` indicator, and `HOLD 2s / 10 MIN` action. One uninterrupted two-second hold changed the display to SUPPLY with water dots, `ON`, and the countdown near ten minutes. One short press then returned the display immediately to DRAIN: the dots disappeared and the snowflake and `OFF` indication returned. This verifies the physical display/touch presentation and the authorized device-to-Pi action round trip for this disconnected test.
+
+With 24 V still disconnected, the user then read both Raspberry Pi outputs with `pinctrl` across one complete transition:
+
+| Observed at | Display/command state | GPIO26 | GPIO20 |
+| --- | --- | --- | --- |
+| `2026-09-30T21:19:33+00:00` | DRAIN / OFF | `hi` | `hi` |
+| `2026-09-30T21:20:24+00:00` | SUPPLY / ON | `lo` | `lo` |
+| `2026-09-30T21:21:05+00:00` | DRAIN / OFF | `hi` | `hi` |
+
+This verifies the coupled software/GPIO sequence `DRAIN hi/hi -> SUPPLY lo/lo -> DRAIN hi/hi` for the exact dial candidate and the Pi configuration active during the observation. At `2026-09-30T21:24:42+00:00`, the user read back deployed Pi repository commit `dab832f4dd98095db8e68d2189d7f159abc93183`, `FREEZE_PROTECT_CONTROL_MODE=manual_timed`, and both `freeze-protect.service` and `freeze-protect-pair-gpio.service` as active. GPIO levels do not prove relay contacts, valve position, or water routing. At this disconnected stage, every 24 V, hydraulic, and energized fail-safe observation remained `NOT_VERIFIED`.
+
+At `2026-09-30T23:29:07+02:00`, the user reported that the bounded 24 V functional test described for this candidate had already been performed and worked: SUPPLY enabled the hot- and cold-water feed, and the subsequent DRAIN closed the feeds and opened the drain path. This is user-observed physical functional evidence for the normal energized command path. The exact actuation timestamp, duration, independent measurement, and photo or video evidence were not separately recorded.
+
+| Energized outcome | Evidence for this candidate |
+| --- | --- |
+| Normal SUPPLY then DRAIN | `VERIFIED` by user physical observation |
+| Communication loss | `NOT_VERIFIED` with energized valves |
+| Pi process crash or hang | `NOT_VERIFIED` with energized valves |
+| Pi controller reset or reboot | `NOT_VERIFIED` with energized valves |
+| Power loss and restoration | `NOT_VERIFIED` with energized valves |
+
+The live functional observation does not establish those four fault outcomes, long-duration reliability, exact relay-contact timing, or independent valve-position feedback. DRAIN remains the required final state.

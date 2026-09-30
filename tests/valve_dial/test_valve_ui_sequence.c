@@ -13,7 +13,8 @@ static uint32_t fake_now = 1000, next_id, session = 1;
 static valve_client_callback_fn client_callback;
 static void *client_context;
 static int posts, gets, valve_indicator;
-static lv_obj_t objects[16];
+static valve_action_t last_action;
+static lv_obj_t objects[80];
 static unsigned object_count;
 static lv_obj_t screen;
 struct fake_queue { unsigned capacity, count, head; size_t item_size; unsigned char data[4][256]; };
@@ -41,7 +42,7 @@ int xQueueReceive(QueueHandle_t q, void *item, unsigned ticks) {
 }
 void xQueueReset(QueueHandle_t q) { q->head = q->count = 0; }
 lv_obj_t *lv_screen_active(void) { return &screen; }
-lv_obj_t *lv_obj_create(lv_obj_t *p) { (void)p; assert(object_count < 16); return &objects[object_count++]; }
+lv_obj_t *lv_obj_create(lv_obj_t *p) { (void)p; assert(object_count < 80); return &objects[object_count++]; }
 lv_obj_t *lv_label_create(lv_obj_t *p) { return lv_obj_create(p); }
 lv_obj_t *lv_btn_create(lv_obj_t *p) { return lv_obj_create(p); }
 void lv_obj_set_size(lv_obj_t *o, int w, int h) { (void)o;(void)w;(void)h; }
@@ -54,11 +55,13 @@ void lv_obj_set_style_pad_all(lv_obj_t *o, int c, int s) {(void)o;(void)c;(void)
 void lv_obj_add_flag(lv_obj_t *o, unsigned f) { o->flags |= f; }
 void lv_obj_clear_flag(lv_obj_t *o, unsigned f) { o->flags &= ~f; }
 void lv_obj_align(lv_obj_t *o, int a, int x, int y) {(void)o;(void)a;(void)x;(void)y;}
+void lv_obj_set_pos(lv_obj_t *o, int x, int y) {(void)o;(void)x;(void)y;}
 void lv_label_set_text(lv_obj_t *o, const char *s) { snprintf(o->text, sizeof o->text, "%s", s); }
 void lv_obj_move_foreground(lv_obj_t *o) { (void)o; }
 void lv_obj_add_state(lv_obj_t *o, unsigned s) { o->state |= s; }
 void lv_obj_clear_state(lv_obj_t *o, unsigned s) { o->state &= ~s; }
 int lv_color_hex(unsigned c) { return (int)c; }
+void lv_obj_set_style_border_color(lv_obj_t *o, int c, int s) {(void)o;(void)c;(void)s;}
 void ui_set_valve_active(bool active) { valve_indicator = active; }
 static uint32_t config_generation;
 uint32_t valve_config_generation(void) { return config_generation; }
@@ -71,6 +74,7 @@ bool valve_client_start(valve_client_callback_fn callback, void *context) {
 bool valve_client_request_get_tagged(uint32_t *id) { gets++; next_id++; if (id) *id = next_id; return true; }
 bool valve_client_request_post_tagged(valve_action_t action, uint32_t *id) {
     assert(action == VALVE_ACTION_START_600S || action == VALVE_ACTION_DRAIN);
+    last_action = action;
     posts++; next_id++; if (id) *id = next_id; return true;
 }
 bool valve_client_request_post_for_config(valve_action_t action, uint32_t generation, uint32_t *id) {
@@ -93,66 +97,73 @@ int main(void) {
     emit(initial, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
     /* Worker receipt can occur after ui_loop_task captured its entry time. */
     valve_ui_process(fake_now - 1, true);
-    assert(strcmp(objects[2].text, "DRAIN (0)") == 0);
+    assert(strcmp(objects[2].text, "OFF") == 0);
+    assert(strcmp(objects[5].text, "HOLD 2s\n10 MIN") == 0);
+    assert(objects[11].flags & LV_OBJ_FLAG_HIDDEN);   /* no water while DRAIN */
+    assert(!(objects[48].flags & LV_OBJ_FLAG_HIDDEN)); /* snowflake visible */
     assert(!(objects[4].state & LV_STATE_DISABLED));
     valve_ui_wake();
     uint32_t old_get = next_id;
-    valve_ui_touch(100, 180, true, false, 1100);
-    valve_ui_touch(100, 180, true, false, 3100);
+    valve_ui_touch(100, 260, true, false, 1100);
+    valve_ui_touch(100, 260, true, false, 3100);
     assert(posts == 1);
     uint32_t action = next_id;
     emit(old_get, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
     fake_now = 3100; process();
-    assert(strcmp(objects[2].text, "UNKNOWN / FAULT") == 0);
-    assert(objects[4].state & LV_STATE_DISABLED);
+    assert(strcmp(objects[2].text, "FAULT") == 0);
+    assert(strcmp(objects[3].text, "Checking Pi...") == 0);
+    assert(!(objects[4].state & LV_STATE_DISABLED)); /* deliberate DRAIN remains available */
     emit(action, session, VALVE_CLIENT_EVENT_POST_STATUS, VALVE_CLIENT_OK, VALVE_SUPPLY);
     process();
-    assert(strcmp(objects[2].text, "SUPPLY (1)") == 0);
+    assert(strcmp(objects[2].text, "ON") == 0);
+    assert(strcmp(objects[5].text, "10:00") == 0);
+    assert(!(objects[11].flags & LV_OBJ_FLAG_HIDDEN));
+    assert(objects[48].flags & LV_OBJ_FLAG_HIDDEN);
     assert(valve_indicator);
-    valve_ui_touch(100, 180, false, false, 3101);
-    valve_ui_touch(100, 270, true, false, 3102);
-    valve_ui_touch(100, 270, false, false, 3103);
+    valve_ui_touch(100, 260, false, false, 3101);
+    valve_ui_touch(100, 260, true, false, 3102);
+    valve_ui_touch(100, 260, false, false, 3103);
     assert(posts == 2);
     uint32_t drain_action = next_id;
     emit(drain_action, session, VALVE_CLIENT_EVENT_POST_STATUS, VALVE_CLIENT_TIMEOUT, VALVE_UNKNOWN);
     process();
-    assert(strcmp(objects[2].text, "UNKNOWN / FAULT") == 0);
-    assert(objects[4].state & LV_STATE_DISABLED);
+    assert(strcmp(objects[2].text, "FAULT") == 0);
+    assert(!(objects[4].state & LV_STATE_DISABLED));
     emit(drain_action, session, VALVE_CLIENT_EVENT_RECOVERY_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
     process();
-    assert(strcmp(objects[2].text, "DRAIN (0)") == 0);
+    assert(strcmp(objects[2].text, "OFF") == 0);
     /* A failed hold remains consumed across recovery until physical release. */
-    valve_ui_touch(100, 180, true, false, fake_now);
-    fake_now += 2000; valve_ui_touch(100, 180, true, false, fake_now);
+    valve_ui_touch(100, 260, true, false, fake_now);
+    fake_now += 2000; valve_ui_touch(100, 260, true, false, fake_now);
     assert(posts == 3);
     emit(next_id, session, VALVE_CLIENT_EVENT_POST_STATUS, VALVE_CLIENT_TIMEOUT, VALVE_UNKNOWN);
     process();
     emit(next_id, session, VALVE_CLIENT_EVENT_RECOVERY_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
     process();
-    valve_ui_touch(100, 180, true, false, fake_now);
-    fake_now += 2000; valve_ui_touch(100, 180, true, false, fake_now);
+    valve_ui_touch(100, 260, true, false, fake_now);
+    fake_now += 2000; valve_ui_touch(100, 260, true, false, fake_now);
     assert(posts == 3);
     session++; valve_ui_connected(false); process();
     session++; valve_ui_connected(true); process();
     valve_ui_wake();
     emit(next_id, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
     process();
-    valve_ui_touch(100, 180, true, false, fake_now);
-    fake_now += 2000; valve_ui_touch(100, 180, true, false, fake_now);
+    valve_ui_touch(100, 260, true, false, fake_now);
+    fake_now += 2000; valve_ui_touch(100, 260, true, false, fake_now);
     assert(posts == 3);
-    valve_ui_touch(100, 180, false, false, fake_now);
+    valve_ui_touch(100, 260, false, false, fake_now);
     for (int i = 0; i < 4; i++) {
         assert(valve_client_request_get_tagged(NULL));
         emit(next_id, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
     }
     emit(next_id + 1, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_TIMEOUT, VALVE_UNKNOWN);
     process();
-    assert(strcmp(objects[2].text, "UNKNOWN / FAULT") == 0);
-    assert(objects[4].state & LV_STATE_DISABLED);
+    assert(strcmp(objects[2].text, "FAULT") == 0);
+    assert(!(objects[4].state & LV_STATE_DISABLED));
     uint32_t barrier = next_id;
     emit(barrier - 1, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
     process();
-    assert(objects[4].state & LV_STATE_DISABLED);
+    assert(!(objects[4].state & LV_STATE_DISABLED));
     emit(barrier, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
     process();
     assert(!(objects[4].state & LV_STATE_DISABLED));
@@ -162,58 +173,54 @@ int main(void) {
     process();
     emit(++next_id, old_session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
     process();
-    assert(strcmp(objects[2].text, "UNKNOWN / FAULT") == 0);
+    assert(strcmp(objects[2].text, "FAULT") == 0);
     valve_ui_wake();
     emit(next_id, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
     process();
-    assert(strcmp(objects[2].text, "DRAIN (0)") == 0);
+    assert(strcmp(objects[2].text, "OFF") == 0);
     /* Config changes during a hold and while an old response is queued. */
-    valve_ui_touch(100, 180, true, false, fake_now);
+    valve_ui_touch(100, 260, true, false, fake_now);
     int before_change = posts;
     emit(next_id, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
     config_generation += 2;
     fake_now += 2000;
-    valve_ui_touch(100, 180, true, false, fake_now); /* before next UI process */
+    valve_ui_touch(100, 260, true, false, fake_now); /* before next UI process */
     assert(posts == before_change);
     process();
-    assert(strcmp(objects[2].text, "UNKNOWN / FAULT") == 0);
+    assert(strcmp(objects[2].text, "FAULT") == 0);
     emit(next_id, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
     process();
-    valve_ui_touch(100, 180, true, false, fake_now);
-    fake_now += 2000; valve_ui_touch(100, 180, true, false, fake_now);
+    valve_ui_touch(100, 260, true, false, fake_now);
+    fake_now += 2000; valve_ui_touch(100, 260, true, false, fake_now);
     assert(posts == before_change);
-    valve_ui_touch(100, 180, false, false, fake_now);
+    valve_ui_touch(100, 260, false, false, fake_now);
     fake_now += 11000;
     process();
-    assert(strcmp(objects[2].text, "UNKNOWN / FAULT") == 0);
+    assert(strcmp(objects[2].text, "FAULT") == 0);
     valve_ui_wake();
     emit(next_id, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
     fake_now += 11000;  // Leave the completion queued beyond the freshness limit.
     process();
-    assert(strcmp(objects[2].text, "UNKNOWN / FAULT") == 0);
-    assert(objects[4].state & LV_STATE_DISABLED);
+    assert(strcmp(objects[2].text, "FAULT") == 0);
+    assert(!(objects[4].state & LV_STATE_DISABLED));
     /* Every new configuration can DRAIN despite fault, malformed status, or timeout.
      * The client represents FAULT/SAFE_DRAIN and malformed payloads as INVALID. */
     const valve_client_result_t failures[] = {VALVE_CLIENT_INVALID, VALVE_CLIENT_TIMEOUT};
     for (unsigned i = 0; i < sizeof failures / sizeof failures[0]; ++i) {
-        valve_ui_touch(100, 270, true, false, fake_now);
+        valve_ui_touch(100, 260, true, false, fake_now);
         int before = posts;
         config_generation += 2;
         process();
-        valve_ui_touch(100, 270, false, false, fake_now);
+        valve_ui_touch(100, 260, false, false, fake_now);
         assert(posts == before); /* old-generation contact cannot act */
         emit(next_id, session, VALVE_CLIENT_EVENT_GET, failures[i], VALVE_UNKNOWN);
         process();
-        assert(strcmp(objects[2].text, "UNKNOWN / FAULT") == 0);
-        assert(objects[4].state & LV_STATE_DISABLED);
-        assert(!(objects[6].state & LV_STATE_DISABLED));
-        valve_ui_touch(100, 180, true, false, fake_now);
-        fake_now += 2000; valve_ui_touch(100, 180, true, false, fake_now);
-        valve_ui_touch(100, 180, false, false, fake_now);
-        assert(posts == before); /* unknown status never authorizes SUPPLY */
-        valve_ui_touch(100, 270, true, false, fake_now);
-        valve_ui_touch(100, 270, false, false, fake_now);
-        assert(posts == before + 1); /* new deliberate DRAIN does not need normal status */
+        assert(strcmp(objects[2].text, "FAULT") == 0);
+        assert(!(objects[4].state & LV_STATE_DISABLED));
+        valve_ui_touch(100, 260, true, false, fake_now);
+        valve_ui_touch(100, 260, false, false, fake_now);
+        assert(posts == before + 1);
+        assert(last_action == VALVE_ACTION_DRAIN); /* unknown status can only request DRAIN */
     }
     puts("valve UI sequence tests passed");
 }
