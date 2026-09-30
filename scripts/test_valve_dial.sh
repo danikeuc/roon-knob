@@ -50,6 +50,10 @@ python3 - <<'PY'
 from pathlib import Path
 touch = Path('idf_app/main/platform_display_idf.c').read_text()
 ui = Path('idf_app/main/valve_ui_dial.c').read_text()
+client = Path('idf_app/main/valve_client_dial.c').read_text()
+assert '#define VALVE_HTTP_STACK_SIZE (12 * 1024)' in client
+assert 'xTaskCreate(worker_task, "valve_http", VALVE_HTTP_STACK_SIZE' in client
+assert 'uxTaskGetStackHighWaterMark(NULL)' in client
 assert 'if (s_touch_started_on_valve)' in touch
 press = touch[touch.index('if (s_touch_started_on_valve)'):touch.index('return;', touch.index('if (s_touch_started_on_valve)'))]
 assert 'valve_ui_touch(valve_touch_coordinate(x, s_current_rotation)' in press

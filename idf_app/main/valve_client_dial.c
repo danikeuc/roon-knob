@@ -4,12 +4,14 @@
 #include <string.h>
 #ifndef VALVE_CLIENT_HOST_TEST
 #include <esp_http_client.h>
+#include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
 #endif
 
 #define RESPONSE_CAP 2048
+#define VALVE_HTTP_STACK_SIZE (12 * 1024)
 #define STATUS_ROUTE "/api/v1/display/status"
 #define START_ROUTE "/api/v1/display/actions/timed-shower"
 #define DRAIN_ROUTE "/api/v1/display/actions/drain"
@@ -97,6 +99,7 @@ void valve_client_test_transport(valve_client_transport_fn transport, void *cont
 #else
 static QueueHandle_t s_queue;
 static TaskHandle_t s_worker;
+static const char *TAG = "valve_client";
 
 static int esp_transport(const char *method, const char *url, const char *token,
                          int *http_status, char *response, size_t cap,
@@ -307,9 +310,16 @@ static void worker_task(void *context) {
     (void)context;
     s_worker = xTaskGetCurrentTaskHandle();
     work_item_t work;
+    UBaseType_t lowest_free_bytes = VALVE_HTTP_STACK_SIZE;
     for (;;) {
         if (xQueueReceive(s_queue, &work, portMAX_DELAY) != pdTRUE) continue;
         dispatch(&work);
+        UBaseType_t free_bytes = uxTaskGetStackHighWaterMark(NULL);
+        if (free_bytes < lowest_free_bytes) {
+            lowest_free_bytes = free_bytes;
+            ESP_LOGI(TAG, "valve_http stack high-water mark: %u/%u bytes free",
+                     (unsigned)free_bytes, VALVE_HTTP_STACK_SIZE);
+        }
     }
 }
 bool valve_client_start(valve_client_callback_fn callback, void *context) {
@@ -317,7 +327,8 @@ bool valve_client_start(valve_client_callback_fn callback, void *context) {
     s_callback = callback; s_callback_context = context;
     s_queue = xQueueCreate(4, sizeof(work_item_t));
     if (!s_queue) return false;
-    if (xTaskCreate(worker_task, "valve_http", 6144, NULL, 4, &s_worker) != pdPASS) {
+    if (xTaskCreate(worker_task, "valve_http", VALVE_HTTP_STACK_SIZE,
+                    NULL, 4, &s_worker) != pdPASS) {
         vQueueDelete(s_queue); s_queue = NULL; return false;
     }
     return true;
