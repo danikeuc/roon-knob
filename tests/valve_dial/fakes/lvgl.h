@@ -21,9 +21,11 @@ void lv_obj_set_style_pad_all(lv_obj_t *, int, int);
 void lv_obj_add_flag(lv_obj_t *, unsigned);
 void lv_obj_clear_flag(lv_obj_t *, unsigned);
 void lv_obj_align(lv_obj_t *, int, int, int);
+void lv_obj_set_pos(lv_obj_t *, int, int);
 void lv_label_set_text(lv_obj_t *, const char *);
 void lv_obj_move_foreground(lv_obj_t *);
 void lv_obj_add_state(lv_obj_t *, unsigned);
 void lv_obj_clear_state(lv_obj_t *, unsigned);
 int lv_color_hex(unsigned);
+void lv_obj_set_style_border_color(lv_obj_t *, int, int);
 #endif

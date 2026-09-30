@@ -19,7 +19,7 @@
 
 static uint32_t fake_now = 1000;
 static int posts, gets, valve_indicator;
-static lv_obj_t objects[16];
+static lv_obj_t objects[80];
 static unsigned object_count;
 static lv_obj_t screen;
 struct fake_queue { unsigned capacity, count, head; size_t item_size; unsigned char data[4][256]; };
@@ -47,7 +47,7 @@ int xQueueReceive(QueueHandle_t q, void *item, unsigned ticks) {
 }
 void xQueueReset(QueueHandle_t q) { q->head = q->count = 0; }
 lv_obj_t *lv_screen_active(void) { return &screen; }
-lv_obj_t *lv_obj_create(lv_obj_t *p) { (void)p; assert(object_count < 16); return &objects[object_count++]; }
+lv_obj_t *lv_obj_create(lv_obj_t *p) { (void)p; assert(object_count < 80); return &objects[object_count++]; }
 lv_obj_t *lv_label_create(lv_obj_t *p) { return lv_obj_create(p); }
 lv_obj_t *lv_btn_create(lv_obj_t *p) { return lv_obj_create(p); }
 void lv_obj_set_size(lv_obj_t *o, int w, int h) { (void)o;(void)w;(void)h; }
@@ -60,11 +60,13 @@ void lv_obj_set_style_pad_all(lv_obj_t *o, int c, int s) {(void)o;(void)c;(void)
 void lv_obj_add_flag(lv_obj_t *o, unsigned f) { o->flags |= f; }
 void lv_obj_clear_flag(lv_obj_t *o, unsigned f) { o->flags &= ~f; }
 void lv_obj_align(lv_obj_t *o, int a, int x, int y) {(void)o;(void)a;(void)x;(void)y;}
+void lv_obj_set_pos(lv_obj_t *o, int x, int y) {(void)o;(void)x;(void)y;}
 void lv_label_set_text(lv_obj_t *o, const char *s) { snprintf(o->text, sizeof o->text, "%s", s); }
 void lv_obj_move_foreground(lv_obj_t *o) { (void)o; }
 void lv_obj_add_state(lv_obj_t *o, unsigned s) { o->state |= s; }
 void lv_obj_clear_state(lv_obj_t *o, unsigned s) { o->state &= ~s; }
 int lv_color_hex(unsigned c) { return (int)c; }
+void lv_obj_set_style_border_color(lv_obj_t *o, int c, int s) {(void)o;(void)c;(void)s;}
 void ui_set_valve_active(bool active) { valve_indicator = active; }
 
 static const char *const secret = "integration-private-token";
@@ -170,7 +172,7 @@ int main(void) {
     valve_ui_connected(true);
     valve_ui_show(true);
     flush();
-    assert(strcmp(objects[2].text, "DRAIN (0)") == 0);
+    assert(strcmp(objects[2].text, "OFF") == 0);
     assert(posts == 0 && gets >= 1);
     valve_gesture_context_t media = {0};
     assert(valve_gesture_classify(80, 4, 250, 0, media) == VALVE_GESTURE_SWITCH_SCREEN);
@@ -184,39 +186,39 @@ int main(void) {
     media.art_mode = false; media.wake_touch = true;
     assert(valve_gesture_classify(80, 0, 250, 0, media) == VALVE_GESTURE_NONE);
 
-    valve_ui_touch(100, 180, true, false, fake_now);
-    fake_now += 1999; valve_ui_touch(100, 180, true, false, fake_now);
+    valve_ui_touch(100, 260, true, false, fake_now);
+    fake_now += 1999; valve_ui_touch(100, 260, true, false, fake_now);
     assert(posts == 0);
-    fake_now++; valve_ui_touch(100, 180, true, false, fake_now);
+    fake_now++; valve_ui_touch(100, 260, true, false, fake_now);
     assert(posts == 0);  /* queued until worker runs */
     flush();
     assert(start_posts == 1 && drain_posts == 0);
     assert(strcmp(request_trace + strlen(request_trace) - 2, "SG") == 0);
-    assert(strcmp(objects[2].text, "SUPPLY (1)") == 0);
-    assert(strcmp(objects[3].text, "10:00 remaining") == 0);
+    assert(strcmp(objects[2].text, "ON") == 0);
+    assert(strcmp(objects[5].text, "10:00") == 0);
     fake_now += 30000; valve_ui_wake(); flush();
-    assert(strcmp(objects[3].text, "9:30 remaining") == 0);
+    assert(strcmp(objects[5].text, "9:30") == 0);
     assert(bridge_posts == 0 && !bridge_playing);
 
-    valve_ui_touch(100, 180, false, false, fake_now);
-    valve_ui_touch(100, 270, true, false, fake_now);
-    valve_ui_touch(100, 270, false, false, fake_now + 1);
+    valve_ui_touch(100, 260, false, false, fake_now);
+    valve_ui_touch(100, 260, true, false, fake_now);
+    valve_ui_touch(100, 260, false, false, fake_now + 1);
     flush();
     assert(drain_posts == 1 && pi_deadline_ms == 0);
     assert(strcmp(request_trace + strlen(request_trace) - 2, "DG") == 0);
-    assert(strcmp(objects[2].text, "DRAIN (0)") == 0);
+    assert(strcmp(objects[2].text, "OFF") == 0);
 
     /* A queued action is dropped by the real client on disconnect. */
-    valve_ui_touch(100, 180, true, false, fake_now + 2);
-    valve_ui_touch(100, 180, true, false, fake_now + 2002);
+    valve_ui_touch(100, 260, true, false, fake_now + 2);
+    valve_ui_touch(100, 260, true, false, fake_now + 2002);
     assert(start_posts == 1);
     pi_online = false;
     valve_client_on_disconnect(); valve_ui_connected(false);
     valve_ui_process(fake_now + 2002, true);
-    assert(strcmp(objects[2].text, "UNKNOWN / FAULT") == 0);
+    assert(strcmp(objects[2].text, "FAULT") == 0);
     fake_now += 2100; pi_online = true;
     valve_client_on_reconnect(); valve_ui_connected(true); flush();
-    assert(start_posts == 1 && strcmp(objects[2].text, "DRAIN (0)") == 0);
+    assert(start_posts == 1 && strcmp(objects[2].text, "OFF") == 0);
     assert(bridge_posts == 0);
     assert(strstr(request_trace, secret) == NULL);
     assert(valve_ui_visible());
@@ -240,7 +242,7 @@ int main(void) {
     assert(bridge_posts == 1 && bridge_playing);
     assert(controller_input_dispatch_control(CONTROLLER_CONTROL_INTENT_NEXT));
     assert(bridge_posts == 2);
-    assert(strcmp(objects[2].text, "DRAIN (0)") == 0);
+    assert(strcmp(objects[2].text, "OFF") == 0);
     puts("mock Pi + bridge integration session passed (Roon input/router/client, page switch, hold, 600s, DRAIN, reconnect, no replay, token redaction)");
     return 0;
 }

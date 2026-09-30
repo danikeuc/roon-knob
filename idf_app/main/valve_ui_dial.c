@@ -12,10 +12,15 @@
 
 #define POLL_MS 5000u
 #define STALE_MS 10000u
+#define SCREEN_COLOR 0x05080Bu
+#define ICON_COLOR 0xB8EBFFu
+#define ACTIVE_COLOR 0x48D7E8u
+#define ACTION_DARK_COLOR 0x141C22u
 
 typedef struct { valve_client_event_t event; uint32_t received_at_ms; } completion_t;
 static QueueHandle_t s_completions;
-static lv_obj_t *s_overlay, *s_state, *s_countdown, *s_supply, *s_drain;
+static lv_obj_t *s_overlay, *s_state, *s_countdown, *s_action, *s_action_label;
+static lv_obj_t *s_rain, *s_snow, *s_relay_left, *s_relay_right;
 static valve_status_t s_status;
 static valve_hold_t s_hold;
 static uint32_t s_status_at, s_last_get;
@@ -52,33 +57,107 @@ static bool fresh(uint32_t now_ms) {
            !(s_config_generation & 1u) && !s_gate.pending && s_status.state != VALVE_UNKNOWN &&
            now_ms - s_status_at < STALE_MS;
 }
+
+static lv_obj_t *make_container(lv_obj_t *parent, int x, int y, int width, int height) {
+    lv_obj_t *obj = lv_obj_create(parent);
+    lv_obj_set_pos(obj, x, y);
+    lv_obj_set_size(obj, width, height);
+    lv_obj_set_style_bg_opa(obj, 0, 0);
+    lv_obj_set_style_border_width(obj, 0, 0);
+    lv_obj_set_style_radius(obj, 0, 0);
+    lv_obj_set_style_pad_all(obj, 0, 0);
+    return obj;
+}
+
+static lv_obj_t *make_solid(lv_obj_t *parent, int x, int y, int width, int height,
+                            uint32_t color, int radius) {
+    lv_obj_t *obj = lv_obj_create(parent);
+    lv_obj_set_pos(obj, x, y);
+    lv_obj_set_size(obj, width, height);
+    lv_obj_set_style_bg_color(obj, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(obj, 0, 0);
+    lv_obj_set_style_radius(obj, radius, 0);
+    lv_obj_set_style_pad_all(obj, 0, 0);
+    return obj;
+}
+
+static void create_shower_symbol(void) {
+    lv_obj_t *symbol = make_container(s_overlay, 106, 68, 148, 145);
+    make_solid(symbol, 21, 0, 6, 20, ICON_COLOR, 3);
+    make_solid(symbol, 21, 14, 58, 6, ICON_COLOR, 3);
+    make_solid(symbol, 73, 14, 6, 30, ICON_COLOR, 3);
+    make_solid(symbol, 39, 41, 91, 6, ICON_COLOR, 3);
+
+    s_rain = make_container(symbol, 44, 55, 82, 77);
+    for (int row = 0; row < 6; ++row) {
+        for (int col = 0; col < 6; ++col)
+            make_solid(s_rain, col * 14, row * 14, 7, 7, ICON_COLOR, 4);
+    }
+
+    s_snow = make_container(symbol, 103, 96, 45, 45);
+    make_solid(s_snow, 20, 5, 5, 35, ICON_COLOR, 3);
+    make_solid(s_snow, 5, 20, 35, 5, ICON_COLOR, 3);
+    make_solid(s_snow, 8, 8, 5, 5, ICON_COLOR, 3);
+    make_solid(s_snow, 32, 8, 5, 5, ICON_COLOR, 3);
+    make_solid(s_snow, 8, 32, 5, 5, ICON_COLOR, 3);
+    make_solid(s_snow, 32, 32, 5, 5, ICON_COLOR, 3);
+
+    lv_obj_t *relay = make_container(s_overlay, 246, 37, 34, 14);
+    make_solid(relay, 8, 6, 10, 2, ICON_COLOR, 1);
+    s_relay_left = make_solid(relay, 0, 2, 10, 10, SCREEN_COLOR, 5);
+    s_relay_right = make_solid(relay, 16, 2, 10, 10, SCREEN_COLOR, 5);
+    lv_obj_set_style_border_width(s_relay_left, 2, 0);
+    lv_obj_set_style_border_width(s_relay_right, 2, 0);
+    lv_obj_set_style_border_color(s_relay_left, lv_color_hex(ICON_COLOR), 0);
+    lv_obj_set_style_border_color(s_relay_right, lv_color_hex(ICON_COLOR), 0);
+}
+
 static void render(uint32_t now_ms) {
     if (!s_overlay) return;
     bool current = fresh(now_ms);
     if (!current) {
-        lv_label_set_text(s_state, "UNKNOWN / FAULT");
+        lv_label_set_text(s_state, "FAULT");
         lv_label_set_text(s_countdown, s_gate.pending ? "Checking Pi..." : "Status unavailable");
+        lv_label_set_text(s_action_label, "DRAIN");
+        lv_obj_add_flag(s_rain, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_snow, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_bg_color(s_relay_left, lv_color_hex(SCREEN_COLOR), 0);
+        lv_obj_set_style_bg_color(s_relay_right, lv_color_hex(SCREEN_COLOR), 0);
+        lv_obj_set_style_bg_color(s_action, lv_color_hex(ACTION_DARK_COLOR), 0);
     } else if (s_status.state == VALVE_DRAIN) {
-        lv_label_set_text(s_state, "DRAIN (0)");
-        lv_label_set_text(s_countdown, "Ready for timed supply");
+        lv_label_set_text(s_state, "OFF");
+        lv_label_set_text(s_countdown, "");
+        lv_label_set_text(s_action_label, "HOLD 2s\n10 MIN");
+        lv_obj_add_flag(s_rain, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_snow, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_bg_color(s_relay_left, lv_color_hex(SCREEN_COLOR), 0);
+        lv_obj_set_style_bg_color(s_relay_right, lv_color_hex(SCREEN_COLOR), 0);
+        lv_obj_set_style_bg_color(s_action, lv_color_hex(ACTIVE_COLOR), 0);
     } else {
-        lv_label_set_text(s_state, "SUPPLY (1)");
+        lv_label_set_text(s_state, "ON");
+        lv_label_set_text(s_countdown, "");
         uint32_t elapsed = (now_ms - s_status_at) / 1000u;
         uint32_t remaining = s_status.remaining_seconds > elapsed ?
             s_status.remaining_seconds - elapsed : 0;
         char text[32];
-        snprintf(text, sizeof text, "%lu:%02lu remaining", (unsigned long)(remaining / 60),
+        snprintf(text, sizeof text, "%lu:%02lu", (unsigned long)(remaining / 60),
                  (unsigned long)(remaining % 60));
-        lv_label_set_text(s_countdown, text);
+        lv_label_set_text(s_action_label, text);
+        lv_obj_clear_flag(s_rain, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_snow, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_bg_color(s_relay_left, lv_color_hex(ACTIVE_COLOR), 0);
+        lv_obj_set_style_bg_color(s_relay_right, lv_color_hex(ACTIVE_COLOR), 0);
+        lv_obj_set_style_bg_color(s_action, lv_color_hex(ACTION_DARK_COLOR), 0);
     }
     bool supply = valve_supply_allowed(s_status.state, s_configured, s_connected,
                                         current ? now_ms - s_status_at : STALE_MS);
-    if (supply) lv_obj_clear_state(s_supply, LV_STATE_DISABLED);
-    else lv_obj_add_state(s_supply, LV_STATE_DISABLED);
-    if (valve_drain_allowed(s_configured && s_config_generation == valve_config_generation() &&
-                            !(s_config_generation & 1u), s_connected))
-        lv_obj_clear_state(s_drain, LV_STATE_DISABLED);
-    else lv_obj_add_state(s_drain, LV_STATE_DISABLED);
+    bool drain = valve_drain_allowed(s_configured &&
+                                     s_config_generation == valve_config_generation() &&
+                                     !(s_config_generation & 1u), s_connected);
+    bool enabled = current && s_status.state == VALVE_DRAIN ? supply : drain;
+    if (enabled) lv_obj_clear_state(s_action, LV_STATE_DISABLED);
+    else lv_obj_add_state(s_action, LV_STATE_DISABLED);
     ui_set_valve_active(current && s_status.state == VALVE_SUPPLY);
 }
 static void request_get(uint32_t now_ms) {
@@ -112,31 +191,26 @@ void valve_ui_init(void) {
     s_overlay = lv_obj_create(lv_screen_active());
     lv_obj_set_size(s_overlay, 360, 360);
     lv_obj_center(s_overlay);
-    lv_obj_set_style_bg_color(s_overlay, lv_color_hex(0x101318), 0);
+    lv_obj_set_style_bg_color(s_overlay, lv_color_hex(SCREEN_COLOR), 0);
     lv_obj_set_style_bg_opa(s_overlay, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_overlay, 0, 0);
     lv_obj_set_style_radius(s_overlay, 0, 0);
     lv_obj_set_style_pad_all(s_overlay, 0, 0);
     lv_obj_add_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
     lv_obj_t *title = lv_label_create(s_overlay);
-    lv_label_set_text(title, "VALVES");
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 34);
+    lv_label_set_text(title, "");
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 24);
     s_state = lv_label_create(s_overlay);
-    lv_obj_align(s_state, LV_ALIGN_TOP_MID, 0, 88);
+    lv_obj_set_pos(s_state, 285, 31);
     s_countdown = lv_label_create(s_overlay);
-    lv_obj_align(s_countdown, LV_ALIGN_TOP_MID, 0, 125);
-    s_supply = lv_btn_create(s_overlay);
-    lv_obj_set_size(s_supply, 270, 60);
-    lv_obj_align(s_supply, LV_ALIGN_TOP_MID, 0, 172);
-    lv_obj_t *label = lv_label_create(s_supply);
-    lv_label_set_text(label, "Hold 2s: SUPPLY (1)");
-    lv_obj_center(label);
-    s_drain = lv_btn_create(s_overlay);
-    lv_obj_set_size(s_drain, 270, 60);
-    lv_obj_align(s_drain, LV_ALIGN_TOP_MID, 0, 250);
-    label = lv_label_create(s_drain);
-    lv_label_set_text(label, "DRAIN (0)");
-    lv_obj_center(label);
+    lv_obj_align(s_countdown, LV_ALIGN_TOP_MID, 0, 40);
+    s_action = lv_btn_create(s_overlay);
+    lv_obj_set_size(s_action, 176, 58);
+    lv_obj_align(s_action, LV_ALIGN_TOP_MID, 0, 234);
+    lv_obj_set_style_radius(s_action, 29, 0);
+    s_action_label = lv_label_create(s_action);
+    lv_obj_center(s_action_label);
+    create_shower_symbol();
     render(0);
     (void)valve_client_start(completion_cb, NULL);
 }
@@ -237,10 +311,9 @@ void valve_ui_touch(int x, int y, bool pressed, bool moved, uint32_t now_ms) {
         else valve_ui_cancel_touch();
         return;
     }
-    bool supply_area = x >= 45 && x <= 315 && y >= 172 && y <= 232;
-    bool drain_area = x >= 45 && x <= 315 && y >= 250 && y <= 310;
+    bool action_area = x >= 45 && x <= 315 && y >= 230 && y <= 305;
     if (!pressed) {
-        if (drain_area && valve_drain_tap_allowed(s_touch_drain, s_touch_moved,
+        if (action_area && valve_drain_tap_allowed(s_touch_drain, s_touch_moved,
              VALVE_GESTURE_NONE, s_configured, atomic_load(&s_connected)))
             request_action(VALVE_ACTION_DRAIN);
         valve_ui_cancel_touch();
@@ -248,10 +321,13 @@ void valve_ui_touch(int x, int y, bool pressed, bool moved, uint32_t now_ms) {
     }
     if (!s_touch_target_initialized) {
         s_touch_target_initialized = true;
-        s_touch_supply = supply_area;
-        s_touch_drain = drain_area;
+        bool supply_action = action_area && fresh(now_ms) && s_status.state == VALVE_DRAIN &&
+            valve_supply_allowed(s_status.state, s_configured, atomic_load(&s_connected),
+                                 now_ms - s_status_at);
+        s_touch_supply = supply_action;
+        s_touch_drain = action_area && !supply_action;
     }
-    s_touch_moved |= moved || (s_touch_supply && !supply_area) || (s_touch_drain && !drain_area);
+    s_touch_moved |= moved || ((s_touch_supply || s_touch_drain) && !action_area);
     if (s_touch_supply && valve_supply_allowed(s_status.state, s_configured, s_connected,
                                                 now_ms - s_status_at) &&
         valve_hold_update(&s_hold, true, s_touch_moved, now_ms))
