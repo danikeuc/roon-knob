@@ -55,4 +55,16 @@ With 24 V still disconnected, the user then read both Raspberry Pi outputs with 
 | `2026-09-30T21:20:24+00:00` | SUPPLY / ON | `lo` | `lo` |
 | `2026-09-30T21:21:05+00:00` | DRAIN / OFF | `hi` | `hi` |
 
-This verifies the coupled software/GPIO sequence `DRAIN hi/hi -> SUPPLY lo/lo -> DRAIN hi/hi` for the exact dial candidate and the Pi configuration active during the observation. At `2026-09-30T21:24:42+00:00`, the user read back deployed Pi repository commit `dab832f4dd98095db8e68d2189d7f159abc93183`, `FREEZE_PROTECT_CONTROL_MODE=manual_timed`, and both `freeze-protect.service` and `freeze-protect-pair-gpio.service` as active. GPIO levels do not prove relay contacts, valve position, or water routing. Every 24 V, hydraulic, and energized fail-safe observation remains `NOT_VERIFIED`.
+This verifies the coupled software/GPIO sequence `DRAIN hi/hi -> SUPPLY lo/lo -> DRAIN hi/hi` for the exact dial candidate and the Pi configuration active during the observation. At `2026-09-30T21:24:42+00:00`, the user read back deployed Pi repository commit `dab832f4dd98095db8e68d2189d7f159abc93183`, `FREEZE_PROTECT_CONTROL_MODE=manual_timed`, and both `freeze-protect.service` and `freeze-protect-pair-gpio.service` as active. GPIO levels do not prove relay contacts, valve position, or water routing. At this disconnected stage, every 24 V, hydraulic, and energized fail-safe observation remained `NOT_VERIFIED`.
+
+At `2026-09-30T23:29:07+02:00`, the user reported that the bounded 24 V functional test described for this candidate had already been performed and worked: SUPPLY enabled the hot- and cold-water feed, and the subsequent DRAIN closed the feeds and opened the drain path. This is user-observed physical functional evidence for the normal energized command path. The exact actuation timestamp, duration, independent measurement, and photo or video evidence were not separately recorded.
+
+| Energized outcome | Evidence for this candidate |
+| --- | --- |
+| Normal SUPPLY then DRAIN | `VERIFIED` by user physical observation |
+| Communication loss | `NOT_VERIFIED` with energized valves |
+| Pi process crash or hang | `NOT_VERIFIED` with energized valves |
+| Pi controller reset or reboot | `NOT_VERIFIED` with energized valves |
+| Power loss and restoration | `NOT_VERIFIED` with energized valves |
+
+The live functional observation does not establish those four fault outcomes, long-duration reliability, exact relay-contact timing, or independent valve-position feedback. DRAIN remains the required final state.
