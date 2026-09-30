@@ -42,6 +42,7 @@ void ui_set_network_status(const char *status);  // Show persistent network stat
 
 // Battery indicator
 void ui_update_battery(void);  // Force battery display refresh (call on USB connect/disconnect)
+void ui_set_valve_active(bool active);  // Fresh timed valve interval indicator on Roon page
 
 #ifdef __cplusplus
 }

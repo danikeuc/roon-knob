@@ -301,22 +301,6 @@ static void update_version_label(void) {
     }
 }
 
-static void check_update_cb(lv_event_t *e) {
-    (void)e;
-    const ota_info_t *info = ota_get_info();
-
-    if (info->status == OTA_STATUS_AVAILABLE) {
-        // Update is available - start it
-        set_status_text("Starting update...");
-        ota_start_update();
-    } else {
-        // Check for updates (force=true to bypass dev version skip)
-        set_status_text("Checking...");
-        ota_check_for_update(true);
-    }
-    update_version_label();
-}
-
 static lv_obj_t *create_button(lv_obj_t *parent, const char *label, lv_event_cb_t cb) {
     lv_obj_t *btn = lv_btn_create(parent);
     lv_obj_set_width(btn, lv_pct(100));
@@ -403,7 +387,6 @@ static void ensure_panel(void) {
     s_widgets.status_label = lv_label_create(s_widgets.panel);
     lv_label_set_text(s_widgets.status_label, "Wi-Fi idle");
 
-    create_button(s_widgets.panel, "Check for Update", check_update_cb);
     create_button(s_widgets.panel, "Test Hi-Fi Control", test_bridge_cb);
     create_button(s_widgets.panel, "Factory Reset", factory_reset_cb);
     create_button(s_widgets.panel, "Back", hide_panel_cb);
@@ -538,7 +521,8 @@ void ui_hide_settings(void) {
 }
 
 bool ui_is_settings_visible(void) {
-    return s_widgets.panel && !lv_obj_has_flag(s_widgets.panel, LV_OBJ_FLAG_HIDDEN);
+    return s_reset_confirm_dialog ||
+           (s_widgets.panel && !lv_obj_has_flag(s_widgets.panel, LV_OBJ_FLAG_HIDDEN));
 }
 
 #else

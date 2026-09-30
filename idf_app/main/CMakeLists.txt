@@ -2,6 +2,10 @@ set(SRC_FILES
     "main_idf.c"
     "captive_portal.c"
     "config_server.c"
+    "valve_config_dial.c"
+    "valve_logic.c"
+    "valve_client_dial.c"
+    "valve_ui_dial.c"
     "http_server_lifecycle.c"
     "dns_server.c"
     "ui_network.c"
@@ -83,6 +87,6 @@ idf_component_register(
 
 set_property(TARGET ${COMPONENT_LIB} PROPERTY C_STANDARD 11)
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE TARGET_PC=0)
+target_compile_definitions(${COMPONENT_LIB} PRIVATE TARGET_PC=0 RK_CUSTOM_VALVE_FIRMWARE=1)
 # TODO(#183): Remove after ESP-IDF 6.0 migration (Picolibc has proper strlcpy)
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error=stringop-truncation)
