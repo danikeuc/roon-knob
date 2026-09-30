@@ -45,4 +45,14 @@ At `2026-09-30T23:15:13+02:00`, the shower-symbol candidate from branch head `11
 
 A 60-second serial observation recorded ESP-IDF 5.5.5 boot, display and CST816 touch initialization, restored Wi-Fi configuration, IP `192.168.114.173`, the Sauna Roon zone, artwork retrieval, and `6476/12288` bytes free at the first reported `valve_http` stack high-water mark. No stack-overflow, panic, abort, brownout, or Guru Meditation marker appeared in 281 captured lines. The dial HTTP root returned 200 after boot. No captured line was removed by the token/password redaction filter.
 
-The user physically observed the DRAIN page with the approved shower head without water dots, snowflake, paired-relay `OFF` indicator, and `HOLD 2s / 10 MIN` action. One uninterrupted two-second hold changed the display to SUPPLY with water dots, `ON`, and the countdown near ten minutes. One short press then returned the display immediately to DRAIN: the dots disappeared and the snowflake and `OFF` indication returned. This verifies the physical display/touch presentation and the authorized device-to-Pi action round trip for this disconnected test. It does not prove GPIO levels, relay contacts, valve position, water routing, or energized fail-safe behavior for this candidate. A new Pi GPIO readback and every 24 V or hydraulic observation remain `NOT_VERIFIED`.
+The user physically observed the DRAIN page with the approved shower head without water dots, snowflake, paired-relay `OFF` indicator, and `HOLD 2s / 10 MIN` action. One uninterrupted two-second hold changed the display to SUPPLY with water dots, `ON`, and the countdown near ten minutes. One short press then returned the display immediately to DRAIN: the dots disappeared and the snowflake and `OFF` indication returned. This verifies the physical display/touch presentation and the authorized device-to-Pi action round trip for this disconnected test.
+
+With 24 V still disconnected, the user then read both Raspberry Pi outputs with `pinctrl` across one complete transition:
+
+| Observed at | Display/command state | GPIO26 | GPIO20 |
+| --- | --- | --- | --- |
+| `2026-09-30T21:19:33+00:00` | DRAIN / OFF | `hi` | `hi` |
+| `2026-09-30T21:20:24+00:00` | SUPPLY / ON | `lo` | `lo` |
+| `2026-09-30T21:21:05+00:00` | DRAIN / OFF | `hi` | `hi` |
+
+This verifies the coupled software/GPIO sequence `DRAIN hi/hi -> SUPPLY lo/lo -> DRAIN hi/hi` for the exact dial candidate and the Pi configuration active during the observation. The Pi source revision was not re-read during this sequence, so the readback does not independently establish the currently deployed Pi commit. GPIO levels do not prove relay contacts, valve position, or water routing. Every 24 V, hydraulic, and energized fail-safe observation remains `NOT_VERIFIED`.
