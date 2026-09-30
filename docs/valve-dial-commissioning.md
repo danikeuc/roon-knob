@@ -12,6 +12,12 @@ Run `PATH=/tmp/knob-bin:$PATH ./scripts/test_valve_dial.sh`, `bash /tmp/knob-idf
 
 The custom firmware has no bridge OTA check or update action. Configure the bridge deployment with `FIRMWARE_AUTO_UPDATE=false` so it does not auto-download upstream roon-knob images. Roon control continues through the existing bridge; valve requests go directly to the Pi. Future remote firmware updates require a dedicated controlled image feed, signature verification, rollback design, and a separate review and physical test.
 
+## Shower-symbol UI candidate: 2026-09-30
+
+Commit `3683b9bbbe3c77855a874e7f07b981e6851046d2` on `codex/valve-shower-ui` replaces the technical two-button valve page with the approved shower presentation. DRAIN shows the rain-shower head without water dots, a separate snowflake, outlined paired-relay status, `OFF`, and a 2-second `10 MIN` action. SUPPLY shows the water-dot grid, hides the snowflake, fills the paired-relay status, shows `ON`, and puts the Pi-derived remaining time in the action button. Unknown or stale state shows `FAULT` and `Status unavailable`; the sole available action remains a deliberate DRAIN. The UI does not claim physical relay or valve position.
+
+The full valve host suite passed with a temporary Zig 0.13.0 C compiler after first failing on the old `DRAIN (0)` presentation. The sequence and mock integration tests cover the DRAIN/SUPPLY water-dot and snowflake visibility, 2-second SUPPLY hold, immediate DRAIN, 600-second server interval, Pi countdown correction, unknown-state DRAIN-only behavior, reconnect, stale responses, configuration changes, Roon routing, and token redaction. `git diff --check` also passed. No ESP-IDF artifact was built or flashed for this commit, so display geometry, colors, touch feel, boot stability, and hardware behavior remain `NOT_VERIFIED` for this candidate.
+
 ## First physical session
 
 1. Keep the **24 V valve supply disconnected**. Record the exact firmware SHA and binary hash, flash that binary over USB, and observe a sustained boot with version and Wi-Fi logs that contain no Pi token.
