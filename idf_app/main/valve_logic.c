@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
+#include <stdio.h>
 
 #define STATUS_MAX_BYTES 2048
 #define STATUS_MAX_TOKENS 128
@@ -247,6 +248,28 @@ bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
         out->temperature_available = true;
     }
     return true;
+}
+
+void valve_temperature_format(const valve_status_t *status, char *buffer, size_t buffer_size) {
+    if (!buffer || buffer_size == 0) return;
+    if (!status || !status->temperature_available) {
+        (void)snprintf(buffer, buffer_size, "---");
+        return;
+    }
+
+    char formatted[32];
+    (void)snprintf(formatted, sizeof formatted, "%.1f °C", (double)status->pipe_temperature_c);
+    if (formatted[0] == '-' && formatted[1] == '0' &&
+        formatted[2] == '.' && formatted[3] == '0') {
+        memmove(formatted, formatted + 1, strlen(formatted));
+    }
+    for (char *p = formatted; *p; p++) {
+        if (*p == '.') {
+            *p = ',';
+            break;
+        }
+    }
+    (void)snprintf(buffer, buffer_size, "%s", formatted);
 }
 
 valve_gesture_t valve_gesture_classify(int dx, int dy, uint32_t elapsed_ms,

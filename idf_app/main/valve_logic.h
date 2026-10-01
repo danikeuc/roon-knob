@@ -13,6 +13,7 @@ typedef struct {
     bool temperature_available;
 } valve_status_t;
 bool valve_status_parse(const char *json, size_t len, valve_status_t *out);
+void valve_temperature_format(const valve_status_t *status, char *buffer, size_t buffer_size);
 typedef enum { VALVE_GESTURE_NONE, VALVE_GESTURE_SWITCH_SCREEN,
                VALVE_GESTURE_ART_UP, VALVE_GESTURE_ART_DOWN } valve_gesture_t;
 typedef struct { bool zone_picker, settings, art_mode, wake_touch; } valve_gesture_context_t;

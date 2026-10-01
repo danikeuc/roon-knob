@@ -63,6 +63,41 @@ static void temperature_parse_cases(void) {
         assert(!s.temperature_available);
     }
 }
+static void temperature_format_cases(void) {
+    char buffer[32];
+    valve_status_t s = {.pipe_temperature_c = 6.44f, .temperature_available = true};
+    valve_temperature_format(&s, buffer, sizeof buffer);
+    assert(strcmp(buffer, "6,4 °C") == 0);
+
+    s.pipe_temperature_c = 6.46f;
+    valve_temperature_format(&s, buffer, sizeof buffer);
+    assert(strcmp(buffer, "6,5 °C") == 0);
+
+    s.pipe_temperature_c = -7.2f;
+    valve_temperature_format(&s, buffer, sizeof buffer);
+    assert(strcmp(buffer, "-7,2 °C") == 0);
+
+    s.pipe_temperature_c = -0.04f;
+    valve_temperature_format(&s, buffer, sizeof buffer);
+    assert(strcmp(buffer, "0,0 °C") == 0);
+
+    s.temperature_available = false;
+    valve_temperature_format(&s, buffer, sizeof buffer);
+    assert(strcmp(buffer, "---") == 0);
+    valve_temperature_format(NULL, buffer, sizeof buffer);
+    assert(strcmp(buffer, "---") == 0);
+
+    strcpy(buffer, "keep");
+    valve_temperature_format(&s, NULL, sizeof buffer);
+    valve_temperature_format(&s, buffer, 0);
+    assert(strcmp(buffer, "keep") == 0);
+
+    s.temperature_available = true;
+    s.pipe_temperature_c = 6.44f;
+    char short_buffer[4] = {'x', 'x', 'x', 'x'};
+    valve_temperature_format(&s, short_buffer, sizeof short_buffer);
+    assert(strcmp(short_buffer, "6,4") == 0);
+}
 static void parse_cases(void) {
     valve_status_t s;
     assert(valve_status_parse(ready, strlen(ready), &s) && s.state == VALVE_DRAIN && s.remaining_seconds == 0);
@@ -315,4 +350,4 @@ static void config_change_cases(void) {
     assert(!valve_client_request_post(VALVE_ACTION_DRAIN));
     config_generation++;
 }
-int main(void) { temperature_parse_cases(); parse_cases(); request_cases(); scheduling_cases(); completion_order_cases(); recovery_session_cases(); dial_cases(); config_change_cases(); puts("valve parser/client tests passed"); }
+int main(void) { temperature_parse_cases(); temperature_format_cases(); parse_cases(); request_cases(); scheduling_cases(); completion_order_cases(); recovery_session_cases(); dial_cases(); config_change_cases(); puts("valve parser/client tests passed"); }
