@@ -119,3 +119,11 @@ The operator explicitly chose to skip the sensor-fault test because temperature 
 | Lower-temperature comparison | DEFERRED_UNAVAILABLE | Currently not feasible; accuracy at lower temperatures remains unverified |
 
 Skipped and deferred checks are not passing tests. The sensor-fault test is no longer a required immediate step for this display-only scope; the lower-temperature check is deferred. This decision does not commission automatic control, modify `sensor_commissioned`, or establish hydraulic fault outcomes.
+
+## v1.0.0 release authorization
+
+The operator requested release v1.0.0 after accepting the informational display
+scope and the recorded skipped/deferred tests. [Release scope and component
+identities](releases/v1.0.0.md) distinguish the tested dial binary, Pi package
+metadata update and remaining evidence limits. Earlier draft statuses describe
+their historical checkpoints; current publication state is on GitHub.
