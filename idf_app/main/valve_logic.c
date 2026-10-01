@@ -163,10 +163,10 @@ static bool temperature_token(const char *json, const jsmntok_t *tok, float *val
     memcpy(text, json + tok->start, length);
     text[length] = '\0';
     char *end = NULL;
-    float parsed = strtof(text, &end);
-    if (end != text + length || !isfinite(parsed) || parsed < -50.0f || parsed > 120.0f)
+    double parsed = strtod(text, &end);
+    if (end != text + length || !isfinite(parsed) || parsed < -50.0 || parsed > 120.0)
         return false;
-    *value = parsed;
+    *value = (float)parsed;
     return true;
 }
 bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {

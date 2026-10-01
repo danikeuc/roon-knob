@@ -48,6 +48,8 @@ static void temperature_parse_cases(void) {
         "\"pipe_temperature_c\":6.4,\"sensor_health\":\"HEALTHY\",\"sensor_health\":\"HEALTHY\"",
         "\"pipe_temperature_c\":-50.01,\"sensor_health\":\"HEALTHY\"",
         "\"pipe_temperature_c\":120.01,\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":-50.000001,\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":120.000001,\"sensor_health\":\"HEALTHY\"",
         "\"nested\":{\"pipe_temperature_c\":6.4,\"sensor_health\":\"HEALTHY\"}",
     };
     for (size_t i = 0; i < sizeof unavailable / sizeof unavailable[0]; i++) {
