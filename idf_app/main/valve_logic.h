@@ -9,6 +9,8 @@ typedef struct {
     valve_state_t state;
     uint16_t remaining_seconds;
     char reason[96];
+    float pipe_temperature_c;
+    bool temperature_available;
 } valve_status_t;
 bool valve_status_parse(const char *json, size_t len, valve_status_t *out);
 typedef enum { VALVE_GESTURE_NONE, VALVE_GESTURE_SWITCH_SCREEN,
