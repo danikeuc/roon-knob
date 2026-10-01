@@ -42,7 +42,12 @@ int xQueueReceive(QueueHandle_t q, void *item, unsigned ticks) {
 }
 void xQueueReset(QueueHandle_t q) { q->head = q->count = 0; }
 lv_obj_t *lv_screen_active(void) { return &screen; }
-lv_obj_t *lv_obj_create(lv_obj_t *p) { (void)p; assert(object_count < 80); return &objects[object_count++]; }
+lv_obj_t *lv_obj_create(lv_obj_t *p) {
+    assert(object_count < 80);
+    lv_obj_t *obj = &objects[object_count++];
+    obj->parent = p;
+    return obj;
+}
 lv_obj_t *lv_label_create(lv_obj_t *p) { return lv_obj_create(p); }
 lv_obj_t *lv_btn_create(lv_obj_t *p) { return lv_obj_create(p); }
 void lv_obj_set_size(lv_obj_t *o, int w, int h) { (void)o;(void)w;(void)h; }
@@ -55,7 +60,7 @@ void lv_obj_set_style_pad_all(lv_obj_t *o, int c, int s) {(void)o;(void)c;(void)
 void lv_obj_add_flag(lv_obj_t *o, unsigned f) { o->flags |= f; }
 void lv_obj_clear_flag(lv_obj_t *o, unsigned f) { o->flags &= ~f; }
 void lv_obj_align(lv_obj_t *o, int a, int x, int y) {(void)o;(void)a;(void)x;(void)y;}
-void lv_obj_set_pos(lv_obj_t *o, int x, int y) {(void)o;(void)x;(void)y;}
+void lv_obj_set_pos(lv_obj_t *o, int x, int y) {o->x = x; o->y = y;}
 void lv_label_set_text(lv_obj_t *o, const char *s) { snprintf(o->text, sizeof o->text, "%s", s); }
 void lv_obj_move_foreground(lv_obj_t *o) { (void)o; }
 void lv_obj_add_state(lv_obj_t *o, unsigned s) { o->state |= s; }
@@ -81,11 +86,43 @@ bool valve_client_request_post_for_config(valve_action_t action, uint32_t genera
     return generation == config_generation && valve_client_request_post_tagged(action, id);
 }
 uint32_t valve_client_current_session(void) { return session; }
+static lv_obj_t *find_label(const char *text) {
+    for (unsigned i = 0; i < object_count; ++i)
+        if (strcmp(objects[i].text, text) == 0) return &objects[i];
+    return NULL;
+}
+static void assert_temperature_inside_round_display(const lv_obj_t *label) {
+    /* The enabled LVGL Montserrat 20 glyph descriptors fit these characters
+     * within 16px advances. Reserve 16px per glyph, 24px height (font line
+     * height is 22px), and 4px at the visible circle's edge. */
+    const char *representative[] = {"-50,0 °C", "120,0 °C", "6,4 °C", "---"};
+    assert(label->text_font && label->text_font->size == 20);
+    for (size_t i = 0; i < sizeof representative / sizeof representative[0]; i++) {
+        unsigned glyphs = 0;
+        for (const unsigned char *p = (const unsigned char *)representative[i]; *p; p++)
+            if ((*p & 0xc0u) != 0x80u) glyphs++;
+        int corners_x[] = {label->x, label->x + (int)glyphs * 16};
+        int corners_y[] = {label->y, label->y + 24};
+        for (size_t x = 0; x < 2; x++) for (size_t y = 0; y < 2; y++) {
+            int dx = corners_x[x] - 180, dy = corners_y[y] - 180;
+            assert(dx * dx + dy * dy <= 176 * 176);
+        }
+    }
+}
+static void emit_temperature(uint32_t id, uint32_t origin_session,
+                             valve_client_event_kind_t kind, valve_client_result_t result,
+                             valve_state_t state, bool available, float temperature_c) {
+    valve_client_event_t event = {.request_id = id, .session = origin_session, .kind = kind,
+                                  .config_generation = config_generation, .result = result,
+                                  .status = {.state = state,
+                                             .remaining_seconds = state == VALVE_SUPPLY ? 600 : 0,
+                                             .temperature_available = available,
+                                             .pipe_temperature_c = temperature_c}};
+    client_callback(&event, client_context);
+}
 static void emit(uint32_t id, uint32_t origin_session, valve_client_event_kind_t kind,
                  valve_client_result_t result, valve_state_t state) {
-    valve_client_event_t event = {.request_id = id, .session = origin_session, .kind = kind,
-                                  .config_generation = config_generation, .result = result, .status = {.state = state, .remaining_seconds = state == VALVE_SUPPLY ? 600 : 0}};
-    client_callback(&event, client_context);
+    emit_temperature(id, origin_session, kind, result, state, false, 0);
 }
 static void process(void) { valve_ui_process(fake_now, true); }
 int main(void) {
@@ -93,11 +130,20 @@ int main(void) {
     valve_ui_connected(true);
     process();
     valve_ui_show(true);
+    lv_obj_t *temperature = find_label("---");
+    assert(temperature != NULL);
+    assert(temperature->parent == &objects[0]);
+    assert(temperature->y == 31);
+    assert(temperature->text_font != NULL && temperature->text_font->size == 20);
+    assert(temperature->text_color == lv_color_hex(0xB8EBFFu));
+    assert_temperature_inside_round_display(temperature);
     uint32_t initial = next_id;
-    emit(initial, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
+    emit_temperature(initial, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK,
+                     VALVE_DRAIN, true, 6.44f);
     /* Worker receipt can occur after ui_loop_task captured its entry time. */
     valve_ui_process(fake_now - 1, true);
     assert(strcmp(objects[2].text, "OFF") == 0);
+    assert(strcmp(temperature->text, "6,4 °C") == 0);
     assert(strcmp(objects[5].text, "HOLD 2s\n10 MIN") == 0);
     assert(objects[11].flags & LV_OBJ_FLAG_HIDDEN);   /* no water while DRAIN */
     assert(!(objects[48].flags & LV_OBJ_FLAG_HIDDEN)); /* snowflake visible */
@@ -107,16 +153,20 @@ int main(void) {
     valve_ui_touch(100, 260, true, false, 1100);
     valve_ui_touch(100, 260, true, false, 3100);
     assert(posts == 1);
+    assert(strcmp(temperature->text, "---") == 0); /* pending action clears old reading */
     uint32_t action = next_id;
     emit(old_get, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
     fake_now = 3100; process();
     assert(strcmp(objects[2].text, "FAULT") == 0);
+    assert(strcmp(temperature->text, "---") == 0);
     assert(strcmp(objects[3].text, "Checking Pi...") == 0);
     assert(!(objects[4].state & LV_STATE_DISABLED)); /* deliberate DRAIN remains available */
-    emit(action, session, VALVE_CLIENT_EVENT_POST_STATUS, VALVE_CLIENT_OK, VALVE_SUPPLY);
+    emit_temperature(action, session, VALVE_CLIENT_EVENT_POST_STATUS, VALVE_CLIENT_OK,
+                     VALVE_SUPPLY, true, 6.44f);
     process();
     assert(strcmp(objects[2].text, "ON") == 0);
     assert(strcmp(objects[5].text, "10:00") == 0);
+    assert(strcmp(temperature->text, "6,4 °C") == 0);
     assert(!(objects[11].flags & LV_OBJ_FLAG_HIDDEN));
     assert(objects[48].flags & LV_OBJ_FLAG_HIDDEN);
     assert(valve_indicator);
@@ -128,10 +178,12 @@ int main(void) {
     emit(drain_action, session, VALVE_CLIENT_EVENT_POST_STATUS, VALVE_CLIENT_TIMEOUT, VALVE_UNKNOWN);
     process();
     assert(strcmp(objects[2].text, "FAULT") == 0);
+    assert(strcmp(temperature->text, "---") == 0);
     assert(!(objects[4].state & LV_STATE_DISABLED));
     emit(drain_action, session, VALVE_CLIENT_EVENT_RECOVERY_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
     process();
     assert(strcmp(objects[2].text, "OFF") == 0);
+    assert(strcmp(temperature->text, "---") == 0); /* valid valve, absent telemetry */
     /* A failed hold remains consumed across recovery until physical release. */
     valve_ui_touch(100, 260, true, false, fake_now);
     fake_now += 2000; valve_ui_touch(100, 260, true, false, fake_now);
@@ -143,11 +195,18 @@ int main(void) {
     valve_ui_touch(100, 260, true, false, fake_now);
     fake_now += 2000; valve_ui_touch(100, 260, true, false, fake_now);
     assert(posts == 3);
+    valve_status_t healthy = {.state = VALVE_DRAIN, .temperature_available = true,
+                              .pipe_temperature_c = 6.44f};
+    valve_ui_set_status(&healthy);
+    assert(strcmp(temperature->text, "6,4 °C") == 0);
     session++; valve_ui_connected(false); process();
+    assert(strcmp(temperature->text, "---") == 0);
     session++; valve_ui_connected(true); process();
+    assert(strcmp(temperature->text, "---") == 0);
     valve_ui_wake();
     emit(next_id, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
     process();
+    assert(strcmp(temperature->text, "---") == 0);
     valve_ui_touch(100, 260, true, false, fake_now);
     fake_now += 2000; valve_ui_touch(100, 260, true, false, fake_now);
     assert(posts == 3);
@@ -197,12 +256,18 @@ int main(void) {
     fake_now += 11000;
     process();
     assert(strcmp(objects[2].text, "FAULT") == 0);
+    assert(strcmp(temperature->text, "---") == 0); /* stale status */
     valve_ui_wake();
     emit(next_id, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
     fake_now += 11000;  // Leave the completion queued beyond the freshness limit.
     process();
     assert(strcmp(objects[2].text, "FAULT") == 0);
     assert(!(objects[4].state & LV_STATE_DISABLED));
+    valve_ui_set_status(&healthy);
+    assert(strcmp(temperature->text, "6,4 °C") == 0);
+    fake_now += 11000;
+    process();
+    assert(strcmp(temperature->text, "---") == 0); /* old numeric status expired */
     /* Every new configuration can DRAIN despite fault, malformed status, or timeout.
      * The client represents FAULT/SAFE_DRAIN and malformed payloads as INVALID. */
     const valve_client_result_t failures[] = {VALVE_CLIENT_INVALID, VALVE_CLIENT_TIMEOUT};
@@ -216,11 +281,32 @@ int main(void) {
         emit(next_id, session, VALVE_CLIENT_EVENT_GET, failures[i], VALVE_UNKNOWN);
         process();
         assert(strcmp(objects[2].text, "FAULT") == 0);
+        assert(strcmp(temperature->text, "---") == 0); /* malformed or timed-out completion */
         assert(!(objects[4].state & LV_STATE_DISABLED));
         valve_ui_touch(100, 260, true, false, fake_now);
         valve_ui_touch(100, 260, false, false, fake_now);
         assert(posts == before + 1);
         assert(last_action == VALVE_ACTION_DRAIN); /* unknown status can only request DRAIN */
     }
+    valve_ui_set_status(&healthy);
+    assert(strcmp(temperature->text, "6,4 °C") == 0);
+    valve_ui_wake();
+    emit(next_id, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_INVALID, VALVE_UNKNOWN);
+    process();
+    assert(strcmp(temperature->text, "---") == 0); /* malformed completion */
+    valve_ui_set_status(&healthy);
+    assert(strcmp(temperature->text, "6,4 °C") == 0);
+    valve_ui_wake();
+    emit(next_id, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_TIMEOUT, VALVE_UNKNOWN);
+    process();
+    assert(strcmp(temperature->text, "---") == 0); /* timed-out completion */
+    valve_ui_set_status(&healthy);
+    assert(strcmp(temperature->text, "6,4 °C") == 0);
+    valve_ui_show(false);
+    assert(objects[0].flags & LV_OBJ_FLAG_HIDDEN);
+    assert(temperature->parent == &objects[0]);
+    valve_ui_show(true);
+    assert(!(objects[0].flags & LV_OBJ_FLAG_HIDDEN));
+    assert(strcmp(temperature->text, "6,4 °C") == 0);
     puts("valve UI sequence tests passed");
 }

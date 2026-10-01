@@ -68,3 +68,62 @@ At `2026-09-30T23:29:07+02:00`, the user reported that the bounded 24 V function
 | Power loss and restoration | `NOT_VERIFIED` with energized valves |
 
 The live functional observation does not establish those four fault outcomes, long-duration reliability, exact relay-contact timing, or independent valve-position feedback. DRAIN remains the required final state.
+
+## PT100 shower display development candidate: 2026-10-01
+
+GitHub issue [#7](https://github.com/danikeuc/roon-knob/issues/7) tracks the optional PT100 temperature display. The firmware branch `codex/waveshare-pt100-display` starts at the immutable `v2.5.3-valve.1` source commit `b32fd8a2ee1f3b2731fbc13179c605e86a8c0d0a`. The current candidate was built from source commit `385979069a20c2a9f11ab7d02ef656563cd7855e`, which recognizes JSON Unicode-escaped aliases of the optional telemetry keys and moves the shower-page temperature label inside the 360 × 360 round display's visible circle. This documentation commit follows that source commit and records its build evidence; it does not change the compiled source or claim that the binary was built from the later documentation head. The earlier candidate from `a8d90fad9cf3b01300bae516fcc2687fbae123eb` is superseded.
+
+Before the fix, host regressions failed on an escaped optional key and on the round-display geometry assertion. From the clean fixed source commit, `PATH=/tmp/knob-bin:$PATH ./scripts/test_valve_dial.sh` passed the valve configuration, parser/client, mock Pi and Roon bridge integration, valve UI sequence, and settings gesture tests. The geometry test uses a 16 px advance per glyph, 24 px line height, and a 4 px circle margin; the bundled LVGL Montserrat 20 font descriptors have narrower advances for the representative temperature characters and a 22 px line height. `bash /tmp/knob-idf-build.sh` completed an ESP32-S3 build with `ESP-IDF v5.5.5` (`idf.py --version` in the build environment) and esptool.py v4.12.0. The resulting `idf_app/build/hiphi_dial.bin` is 2,102,064 bytes (`0x201330`) with SHA-256 `c2abd6d1168cac05d3eeb1581fd11d7c64c6e91a43644878584f148c8f4e4b00`. The smallest application partition is `0x280000` bytes, leaving `0x7ecd0` bytes free (20%). `git diff --check` passed. The build left the tracked tree clean; `idf_app/sdkconfig` is generated and ignored, and tracked `idf_app/sdkconfig.defaults` was unchanged from the release base.
+
+These are source, host-test, and compilation results. At the source-only evidence point, this PT100 candidate had not been flashed or observed on the physical Waveshare dial; the later flash observation below supersedes that status. At that source-only stage, shower-page geometry and visibility, Wi-Fi behavior, PT100 accuracy and fault response, relay contacts, valve motion, and water routing were unverified. This source-only work did not connect the 24 V valve supply or perform a SUPPLY action; commissioning requires 24 V to remain disconnected. The hardware session below uses the exact artifact hash above and records the observed flash, boot and display evidence separately.
+
+## PT100 candidate flash and bounded boot — 2026-10-01
+
+The user confirmed 24 V valve power disconnected and approved continuing with COM3 without repeating a disconnect/reconnect check. Before flash, esptool 4.12.0 identified ESP32-S3 revision v0.2, MAC `d0:cf:13:1e:15:44`, matching the previously recorded dial.
+
+Application source `385979069a20c2a9f11ab7d02ef656563cd7855e`, size 2,102,064 bytes, SHA-256 `c2abd6d1168cac05d3eeb1581fd11d7c64c6e91a43644878584f148c8f4e4b00` was flashed with the build-defined bootloader, partition table and initial OTA data. A separate `verify_flash` pass matched the digests of all four regions. NVS at 0x9000..0xcfff was outside the erased/written regions.
+
+A 50-second serial observation from `2026-10-01T01:30:05.738586+00:00` to `2026-10-01T01:30:55.974698+00:00` examined 274 lines in memory and emitted only allowlisted metadata. It recorded one project startup, ESP-IDF v5.5.5, ELF hash prefix `0ac107ac3`, IP `192.168.114.173` and `5896/12288` bytes free at the valve HTTP task watermark. No selected panic, stack-overflow, assertion, brownout or task-watchdog markers were found. HTTP root returned 200 after observation. The inherited version string `2.5.3-valve.1` does not distinguish this candidate from the immutable release; source and binary hashes above identify the flashed candidate.
+
+Operator-supplied Pi evidence records installed source `7a24387efbbe0772ae88646d1d98182feca43369` and authenticated display JSON reporting `24.212243310943986` degrees C / `HEALTHY`, `manual_timed`, `MANUAL_DRAIN`, zero remaining seconds and no timed deadline. After flash, restricted SSH status independently reported active services and GPIO26/GPIO20 output/high.
+
+The candidate is now flashed and boot-observed. The operator subsequently reported `24,3` on the shower page and no temperature on the Roon page. This confirms the observed decimal-comma value and shower-only placement; no screenshot or exact observation timestamp was provided. The operator then reported `24,4` degrees C on an independent thermometer near PT100, approximately 0.1 degree C above the earlier dial value. This sequential one-point comparison is not calibration; reference identity, uncertainty and stabilization were not recorded. At this observation point, signed/extreme-value legibility, the degree glyph in isolation, repeated/cold-point comparisons, sensor-fault/stale telemetry fallback and Wi-Fi recovery had not been verified. The later operator decision below updates Wi-Fi and sensor-test status. The subsequent Roon check is recorded below. No SUPPLY action or energized valve test was performed in this session. PR #8 remains draft.
+
+## Hub service interruption and recovery — operator observation
+
+For the installed Pi source and flashed dial artifact recorded above, the operator was given a trusted-console sequence to stop `freeze-protect.service`, wait 20 seconds and restart it, with an EXIT trap to restore the service. With 24 V valve power disconnected and the shower page visible, the expected presentation was `---` with `FAULT / Status unavailable` during the interruption, followed by temperature and normal DRAIN presentation after restart.
+
+The operator replied `ja vse je delalo tako kot mora` (yes, everything worked as expected), confirming those expected transitions. No console transcript or measured transition latency was supplied for this test; 20 seconds is the prescribed interruption, not an independently measured duration. A subsequent restricted SSH status check independently reported Node-RED, the paired GPIO daemon and Hub active, with GPIO26 and GPIO20 output/high.
+
+This establishes operator-observed Hub/API unavailability and display recovery for this candidate. At this observation point, sensor-fault or stale telemetry while the API remained reachable, Wi-Fi interruption, process crash/hang and physical valve fault outcomes were unverified. The later Wi-Fi report and test-scope decision below update only their stated scope.
+
+## Roon and shower-page regression — operator observation
+
+After the Hub recovery test, the operator was asked to switch to Roon, check play/pause, change volume by one encoder step and back, then return to the shower page and check temperature and OFF, keeping 24 V valve power disconnected. The operator replied `vse deluje bp` (everything works without problems), confirming all three checks for the installed Pi source and flashed dial artifact recorded above.
+
+This is operator-observed transport, volume and page-return evidence. No exact observation time, volume values, screenshot or independent bridge trace was supplied. The OFF indicator is UI evidence, not relay-contact or physical valve-position feedback. No SUPPLY action was requested in this check.
+
+## Wi-Fi observation and operator test-scope decision
+
+The operator reported that Wi-Fi interruption worked during several accidental disconnections in the current candidate session. Record Wi-Fi interruption/recovery as `VERIFIED_BY_OPERATOR`. The exact interrupted component, count, duration, transition timing and logs were not supplied; this report does not establish physical valve behavior during an outage.
+
+The operator explicitly chose to skip the sensor-fault test because temperature is informational, and reported that a lower-temperature test is currently not possible. This decision updates the current display-only acceptance scope:
+
+| Check | Status | Basis and limit |
+| --- | --- | --- |
+| Ordinary shower temperature and page placement | VERIFIED_BY_OPERATOR | Earlier shower-only observation; one decimal comma |
+| Hub interruption and display recovery | VERIFIED_BY_OPERATOR | Earlier bounded stop/restart check |
+| Roon play/pause, volume and shower-page return | VERIFIED_BY_OPERATOR | Earlier confirmation of all three checks |
+| Wi-Fi interruption/recovery | VERIFIED_BY_OPERATOR | Operator report of several accidental interruptions |
+| Physical sensor-fault / individual-lead test | SKIPPED_BY_OPERATOR | Waived for the current informational display scope; behavior remains unverified on hardware |
+| Lower-temperature comparison | DEFERRED_UNAVAILABLE | Currently not feasible; accuracy at lower temperatures remains unverified |
+
+Skipped and deferred checks are not passing tests. The sensor-fault test is no longer a required immediate step for this display-only scope; the lower-temperature check is deferred. This decision does not commission automatic control, modify `sensor_commissioned`, or establish hydraulic fault outcomes.
+
+## v1.0.0 release authorization
+
+The operator requested release v1.0.0 after accepting the informational display
+scope and the recorded skipped/deferred tests. [Release scope and component
+identities](releases/v1.0.0.md) distinguish the tested dial binary, Pi package
+metadata update and remaining evidence limits. Earlier draft statuses describe
+their historical checkpoints; current publication state is on GitHub.

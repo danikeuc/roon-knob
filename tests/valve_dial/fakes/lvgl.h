@@ -1,7 +1,20 @@
 #ifndef FAKE_LVGL_H
 #define FAKE_LVGL_H
 #include <stdint.h>
-typedef struct lv_obj { unsigned flags, state; char text[96]; } lv_obj_t;
+typedef struct lv_font { int size; } lv_font_t;
+static inline const lv_font_t *fake_font_montserrat_20(void) {
+    static const lv_font_t font = {.size = 20};
+    return &font;
+}
+#define lv_font_montserrat_20 (*fake_font_montserrat_20())
+typedef struct lv_obj {
+    unsigned flags, state;
+    char text[96];
+    struct lv_obj *parent;
+    int x, y;
+    const lv_font_t *text_font;
+    int text_color;
+} lv_obj_t;
 #define LV_OBJ_FLAG_HIDDEN 1u
 #define LV_STATE_DISABLED 2u
 #define LV_ALIGN_TOP_MID 0
@@ -28,4 +41,12 @@ void lv_obj_add_state(lv_obj_t *, unsigned);
 void lv_obj_clear_state(lv_obj_t *, unsigned);
 int lv_color_hex(unsigned);
 void lv_obj_set_style_border_color(lv_obj_t *, int, int);
+static inline void lv_obj_set_style_text_font(lv_obj_t *obj, const lv_font_t *font, int selector) {
+    (void)selector;
+    obj->text_font = font;
+}
+static inline void lv_obj_set_style_text_color(lv_obj_t *obj, int color, int selector) {
+    (void)selector;
+    obj->text_color = color;
+}
 #endif

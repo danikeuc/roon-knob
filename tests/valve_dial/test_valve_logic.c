@@ -7,6 +7,117 @@
 
 static const char *ready = "{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"ready\",\"remaining_seconds\":0}";
 static const char *active = "{\"mode\":\"manual_timed\",\"state\":\"TIMED_SHOWER\",\"command\":\"SUPPLY\",\"reason\":\"timed\",\"remaining_seconds\":600}";
+static void temperature_parse_cases(void) {
+    valve_status_t s;
+    assert(valve_status_parse(ready, strlen(ready), &s));
+    assert(s.state == VALVE_DRAIN && !s.temperature_available);
+    assert(valve_status_parse(active, strlen(active), &s));
+    assert(s.state == VALVE_SUPPLY && !s.temperature_available);
+
+    const struct { const char *number; float expected; } healthy[] = {
+        {"6", 6.0f}, {"6.44", 6.44f}, {"-7.2", -7.2f},
+        {"6.4e0", 6.4f}, {"-50", -50.0f}, {"120", 120.0f},
+    };
+    for (size_t i = 0; i < sizeof healthy / sizeof healthy[0]; i++) {
+        char json[256];
+        int n = snprintf(json, sizeof json,
+                         "{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"ready\",\"remaining_seconds\":0,\"pipe_temperature_c\":%s,\"sensor_health\":\"HEALTHY\"}",
+                         healthy[i].number);
+        assert(n > 0 && (size_t)n < sizeof json);
+        assert(valve_status_parse(json, (size_t)n, &s));
+        assert(s.state == VALVE_DRAIN && s.temperature_available);
+        assert(s.pipe_temperature_c == healthy[i].expected);
+    }
+
+    const char *escaped_healthy[] = {
+        "\"pipe_temperat\\u0075re_c\":6.4,\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":6.4,\"sensor_hea\\u006cth\":\"HEALTHY\"",
+    };
+    for (size_t i = 0; i < sizeof escaped_healthy / sizeof escaped_healthy[0]; i++) {
+        char json[512];
+        int n = snprintf(json, sizeof json,
+                         "{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"ready\",\"remaining_seconds\":0,%s}",
+                         escaped_healthy[i]);
+        assert(n > 0 && (size_t)n < sizeof json);
+        assert(valve_status_parse(json, (size_t)n, &s));
+        assert(s.state == VALVE_DRAIN && s.temperature_available);
+        assert(s.pipe_temperature_c == 6.4f);
+    }
+
+    const char *unavailable[] = {
+        "\"pipe_temperature_c\":null,\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":6.4,\"sensor_health\":\"STALE\"",
+        "\"pipe_temperature_c\":6.4,\"sensor_health\":\"INVALID\"",
+        "\"pipe_temperature_c\":6.4,\"sensor_health\":\"CALIBRATION_REQUIRED\"",
+        "\"pipe_temperature_c\":6.4,\"sensor_health\":\"healthy\"",
+        "\"pipe_temperature_c\":6.4,\"sensor_health\":\"UNKNOWN\"",
+        "\"pipe_temperature_c\":6.4",
+        "\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":\"6.4\",\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":true,\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":[],\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":{},\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":6.4,\"sensor_health\":7",
+        "\"pipe_temperature_c\":6.4,\"sensor_health\":null",
+        "\"pipe_temperature_c\":6.4,\"sensor_health\":\"HEALTHY\",\"pipe_temperature_c\":6.5",
+        "\"pipe_temperature_c\":6.4,\"sensor_health\":\"HEALTHY\",\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":6.4,\"pipe_temperat\\u0075re_c\":6.5,\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperat\\u0075re_c\":6.4,\"pipe_temperature_c\":6.5,\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":6.4,\"sensor_health\":\"HEALTHY\",\"sensor_hea\\u006cth\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":6.4,\"sensor_hea\\u006cth\":\"HEALTHY\",\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":6.4,\"sensor_hea\\u006dth\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":-50.01,\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":120.01,\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":-50.000001,\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":120.000001,\"sensor_health\":\"HEALTHY\"",
+        "\"nested\":{\"pipe_temperature_c\":6.4,\"sensor_health\":\"HEALTHY\"}",
+    };
+    for (size_t i = 0; i < sizeof unavailable / sizeof unavailable[0]; i++) {
+        char json[512];
+        int n = snprintf(json, sizeof json,
+                         "{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"ready\",\"remaining_seconds\":0,%s}",
+                         unavailable[i]);
+        assert(n > 0 && (size_t)n < sizeof json);
+        assert(valve_status_parse(json, (size_t)n, &s));
+        assert(s.state == VALVE_DRAIN && s.remaining_seconds == 0);
+        assert(!s.temperature_available);
+    }
+}
+static void temperature_format_cases(void) {
+    char buffer[32];
+    valve_status_t s = {.pipe_temperature_c = 6.44f, .temperature_available = true};
+    valve_temperature_format(&s, buffer, sizeof buffer);
+    assert(strcmp(buffer, "6,4 °C") == 0);
+
+    s.pipe_temperature_c = 6.46f;
+    valve_temperature_format(&s, buffer, sizeof buffer);
+    assert(strcmp(buffer, "6,5 °C") == 0);
+
+    s.pipe_temperature_c = -7.2f;
+    valve_temperature_format(&s, buffer, sizeof buffer);
+    assert(strcmp(buffer, "-7,2 °C") == 0);
+
+    s.pipe_temperature_c = -0.04f;
+    valve_temperature_format(&s, buffer, sizeof buffer);
+    assert(strcmp(buffer, "0,0 °C") == 0);
+
+    s.temperature_available = false;
+    valve_temperature_format(&s, buffer, sizeof buffer);
+    assert(strcmp(buffer, "---") == 0);
+    valve_temperature_format(NULL, buffer, sizeof buffer);
+    assert(strcmp(buffer, "---") == 0);
+
+    strcpy(buffer, "keep");
+    valve_temperature_format(&s, NULL, sizeof buffer);
+    valve_temperature_format(&s, buffer, 0);
+    assert(strcmp(buffer, "keep") == 0);
+
+    s.temperature_available = true;
+    s.pipe_temperature_c = 6.44f;
+    char short_buffer[4] = {'x', 'x', 'x', 'x'};
+    valve_temperature_format(&s, short_buffer, sizeof short_buffer);
+    assert(strcmp(short_buffer, "6,4") == 0);
+}
 static void parse_cases(void) {
     valve_status_t s;
     assert(valve_status_parse(ready, strlen(ready), &s) && s.state == VALVE_DRAIN && s.remaining_seconds == 0);
@@ -259,4 +370,4 @@ static void config_change_cases(void) {
     assert(!valve_client_request_post(VALVE_ACTION_DRAIN));
     config_generation++;
 }
-int main(void) { parse_cases(); request_cases(); scheduling_cases(); completion_order_cases(); recovery_session_cases(); dial_cases(); config_change_cases(); puts("valve parser/client tests passed"); }
+int main(void) { temperature_parse_cases(); temperature_format_cases(); parse_cases(); request_cases(); scheduling_cases(); completion_order_cases(); recovery_session_cases(); dial_cases(); config_change_cases(); puts("valve parser/client tests passed"); }

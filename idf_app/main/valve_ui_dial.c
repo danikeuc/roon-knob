@@ -20,6 +20,7 @@
 typedef struct { valve_client_event_t event; uint32_t received_at_ms; } completion_t;
 static QueueHandle_t s_completions;
 static lv_obj_t *s_overlay, *s_state, *s_countdown, *s_action, *s_action_label;
+static lv_obj_t *s_temperature;
 static lv_obj_t *s_rain, *s_snow, *s_relay_left, *s_relay_right;
 static valve_status_t s_status;
 static valve_hold_t s_hold;
@@ -116,6 +117,10 @@ static void create_shower_symbol(void) {
 static void render(uint32_t now_ms) {
     if (!s_overlay) return;
     bool current = fresh(now_ms);
+    char temperature_text[32];
+    valve_temperature_format(current ? &s_status : NULL, temperature_text,
+                             sizeof temperature_text);
+    lv_label_set_text(s_temperature, temperature_text);
     if (!current) {
         lv_label_set_text(s_state, "FAULT");
         lv_label_set_text(s_countdown, s_gate.pending ? "Checking Pi..." : "Status unavailable");
@@ -172,6 +177,7 @@ static void request_action(valve_action_t action) {
     s_pending_since = now_ms;
     s_status.state = VALVE_UNKNOWN;
     ui_set_valve_active(false);
+    render(now_ms);
     uint32_t request_id;
     if (!valve_client_request_post_for_config(action, s_config_generation, &request_id)) {
         valve_ui_set_unknown("Request unavailable");
@@ -211,6 +217,10 @@ void valve_ui_init(void) {
     s_action_label = lv_label_create(s_action);
     lv_obj_center(s_action_label);
     create_shower_symbol();
+    s_temperature = lv_label_create(s_overlay);
+    lv_obj_set_pos(s_temperature, 90, 31);
+    lv_obj_set_style_text_font(s_temperature, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_temperature, lv_color_hex(ICON_COLOR), 0);
     render(0);
     (void)valve_client_start(completion_cb, NULL);
 }

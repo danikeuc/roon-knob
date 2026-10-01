@@ -4,6 +4,8 @@
 #include <ctype.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
+#include <stdio.h>
 
 #define STATUS_MAX_BYTES 2048
 #define STATUS_MAX_TOKENS 128
@@ -127,6 +129,26 @@ static bool equal_token(const char *json, const jsmntok_t *tok, const char *valu
     return tok->type == JSMN_STRING && strlen(value) == n &&
            memcmp(json + tok->start, value, n) == 0;
 }
+static bool equal_optional_key(const char *json, const jsmntok_t *tok, const char *value) {
+    if (tok->type != JSMN_STRING) return false;
+    int p = tok->start;
+    for (const unsigned char *expected = (const unsigned char *)value; *expected; expected++) {
+        if (p >= tok->end) return false;
+        unsigned char ch = (unsigned char)json[p++];
+        if (ch == '\\') {
+            if (p >= tok->end || json[p++] != 'u' || tok->end - p < 4) return false;
+            unsigned codepoint = 0;
+            for (int digit = 0; digit < 4; digit++) {
+                unsigned char hex = (unsigned char)json[p++];
+                if (!json_hex((char)hex)) return false;
+                codepoint = codepoint * 16u +
+                    (hex <= '9' ? hex - '0' : (hex <= 'F' ? hex - 'A' : hex - 'a') + 10u);
+            }
+            if (codepoint != *expected) return false;
+        } else if (ch != *expected) return false;
+    }
+    return p == tok->end;
+}
 static int next_token(const jsmntok_t *tokens, int count, int index) {
     int end = tokens[index].end;
     index++;
@@ -153,6 +175,21 @@ static bool number_token(const char *json, const jsmntok_t *tok, uint16_t *value
     *value = (uint16_t)result;
     return true;
 }
+static bool temperature_token(const char *json, const jsmntok_t *tok, float *value) {
+    enum { TEMPERATURE_TOKEN_MAX = 48 };
+    if (tok->type != JSMN_PRIMITIVE || tok->start == tok->end) return false;
+    size_t length = (size_t)(tok->end - tok->start);
+    if (length >= TEMPERATURE_TOKEN_MAX) return false;
+    char text[TEMPERATURE_TOKEN_MAX];
+    memcpy(text, json + tok->start, length);
+    text[length] = '\0';
+    char *end = NULL;
+    double parsed = strtod(text, &end);
+    if (end != text + length || !isfinite(parsed) || parsed < -50.0 || parsed > 120.0)
+        return false;
+    *value = (float)parsed;
+    return true;
+}
 bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
     if (!out) return false;
     memset(out, 0, sizeof *out);
@@ -168,6 +205,9 @@ bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
     for (int p = 0; p < tokens[0].start; p++)
         if (!isspace((unsigned char)json[p])) return false;
     unsigned seen = 0;
+    bool temperature_seen = false, temperature_valid = false;
+    bool health_seen = false, health_valid = false;
+    float temperature = 0.0f;
     int previous_end = tokens[0].start + 1;
     bool first = true;
     bool mode = false, drain_state = false, supply_state = false;
@@ -200,6 +240,14 @@ bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
             memcpy(reason, json + val->start, n); reason[n] = 0;
         } else if (equal_token(json, key, "remaining_seconds")) {
             bit = 16; if (!number_token(json, val, &remaining)) return false;
+        } else if (equal_optional_key(json, key, "pipe_temperature_c")) {
+            if (temperature_seen) temperature_valid = false;
+            else temperature_valid = temperature_token(json, val, &temperature);
+            temperature_seen = true;
+        } else if (equal_optional_key(json, key, "sensor_health")) {
+            if (health_seen) health_valid = false;
+            else health_valid = equal_token(json, val, "HEALTHY");
+            health_seen = true;
         }
         if (bit && (seen & bit)) return false;
         seen |= bit;
@@ -215,7 +263,33 @@ bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
     else return false;
     out->remaining_seconds = remaining;
     memcpy(out->reason, reason, sizeof reason);
+    if (temperature_seen && temperature_valid && health_seen && health_valid) {
+        out->pipe_temperature_c = temperature;
+        out->temperature_available = true;
+    }
     return true;
+}
+
+void valve_temperature_format(const valve_status_t *status, char *buffer, size_t buffer_size) {
+    if (!buffer || buffer_size == 0) return;
+    if (!status || !status->temperature_available) {
+        (void)snprintf(buffer, buffer_size, "---");
+        return;
+    }
+
+    char formatted[32];
+    (void)snprintf(formatted, sizeof formatted, "%.1f °C", (double)status->pipe_temperature_c);
+    if (formatted[0] == '-' && formatted[1] == '0' &&
+        formatted[2] == '.' && formatted[3] == '0') {
+        memmove(formatted, formatted + 1, strlen(formatted));
+    }
+    for (char *p = formatted; *p; p++) {
+        if (*p == '.') {
+            *p = ',';
+            break;
+        }
+    }
+    (void)snprintf(buffer, buffer_size, "%s", formatted);
 }
 
 valve_gesture_t valve_gesture_classify(int dx, int dy, uint32_t elapsed_ms,
