@@ -129,6 +129,26 @@ static bool equal_token(const char *json, const jsmntok_t *tok, const char *valu
     return tok->type == JSMN_STRING && strlen(value) == n &&
            memcmp(json + tok->start, value, n) == 0;
 }
+static bool equal_optional_key(const char *json, const jsmntok_t *tok, const char *value) {
+    if (tok->type != JSMN_STRING) return false;
+    int p = tok->start;
+    for (const unsigned char *expected = (const unsigned char *)value; *expected; expected++) {
+        if (p >= tok->end) return false;
+        unsigned char ch = (unsigned char)json[p++];
+        if (ch == '\\') {
+            if (p >= tok->end || json[p++] != 'u' || tok->end - p < 4) return false;
+            unsigned codepoint = 0;
+            for (int digit = 0; digit < 4; digit++) {
+                unsigned char hex = (unsigned char)json[p++];
+                if (!json_hex((char)hex)) return false;
+                codepoint = codepoint * 16u +
+                    (hex <= '9' ? hex - '0' : (hex <= 'F' ? hex - 'A' : hex - 'a') + 10u);
+            }
+            if (codepoint != *expected) return false;
+        } else if (ch != *expected) return false;
+    }
+    return p == tok->end;
+}
 static int next_token(const jsmntok_t *tokens, int count, int index) {
     int end = tokens[index].end;
     index++;
@@ -220,11 +240,11 @@ bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
             memcpy(reason, json + val->start, n); reason[n] = 0;
         } else if (equal_token(json, key, "remaining_seconds")) {
             bit = 16; if (!number_token(json, val, &remaining)) return false;
-        } else if (equal_token(json, key, "pipe_temperature_c")) {
+        } else if (equal_optional_key(json, key, "pipe_temperature_c")) {
             if (temperature_seen) temperature_valid = false;
             else temperature_valid = temperature_token(json, val, &temperature);
             temperature_seen = true;
-        } else if (equal_token(json, key, "sensor_health")) {
+        } else if (equal_optional_key(json, key, "sensor_health")) {
             if (health_seen) health_valid = false;
             else health_valid = equal_token(json, val, "HEALTHY");
             health_seen = true;

@@ -91,6 +91,24 @@ static lv_obj_t *find_label(const char *text) {
         if (strcmp(objects[i].text, text) == 0) return &objects[i];
     return NULL;
 }
+static void assert_temperature_inside_round_display(const lv_obj_t *label) {
+    /* The enabled LVGL Montserrat 20 glyph descriptors fit these characters
+     * within 16px advances. Reserve 16px per glyph, 24px height (font line
+     * height is 22px), and 4px at the visible circle's edge. */
+    const char *representative[] = {"-50,0 °C", "120,0 °C", "6,4 °C", "---"};
+    assert(label->text_font && label->text_font->size == 20);
+    for (size_t i = 0; i < sizeof representative / sizeof representative[0]; i++) {
+        unsigned glyphs = 0;
+        for (const unsigned char *p = (const unsigned char *)representative[i]; *p; p++)
+            if ((*p & 0xc0u) != 0x80u) glyphs++;
+        int corners_x[] = {label->x, label->x + (int)glyphs * 16};
+        int corners_y[] = {label->y, label->y + 24};
+        for (size_t x = 0; x < 2; x++) for (size_t y = 0; y < 2; y++) {
+            int dx = corners_x[x] - 180, dy = corners_y[y] - 180;
+            assert(dx * dx + dy * dy <= 176 * 176);
+        }
+    }
+}
 static void emit_temperature(uint32_t id, uint32_t origin_session,
                              valve_client_event_kind_t kind, valve_client_result_t result,
                              valve_state_t state, bool available, float temperature_c) {
@@ -115,9 +133,10 @@ int main(void) {
     lv_obj_t *temperature = find_label("---");
     assert(temperature != NULL);
     assert(temperature->parent == &objects[0]);
-    assert(temperature->x == 48 && temperature->y == 31);
+    assert(temperature->y == 31);
     assert(temperature->text_font != NULL && temperature->text_font->size == 20);
     assert(temperature->text_color == lv_color_hex(0xB8EBFFu));
+    assert_temperature_inside_round_display(temperature);
     uint32_t initial = next_id;
     emit_temperature(initial, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK,
                      VALVE_DRAIN, true, 6.44f);

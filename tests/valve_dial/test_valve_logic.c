@@ -29,6 +29,21 @@ static void temperature_parse_cases(void) {
         assert(s.pipe_temperature_c == healthy[i].expected);
     }
 
+    const char *escaped_healthy[] = {
+        "\"pipe_temperat\\u0075re_c\":6.4,\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":6.4,\"sensor_hea\\u006cth\":\"HEALTHY\"",
+    };
+    for (size_t i = 0; i < sizeof escaped_healthy / sizeof escaped_healthy[0]; i++) {
+        char json[512];
+        int n = snprintf(json, sizeof json,
+                         "{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"ready\",\"remaining_seconds\":0,%s}",
+                         escaped_healthy[i]);
+        assert(n > 0 && (size_t)n < sizeof json);
+        assert(valve_status_parse(json, (size_t)n, &s));
+        assert(s.state == VALVE_DRAIN && s.temperature_available);
+        assert(s.pipe_temperature_c == 6.4f);
+    }
+
     const char *unavailable[] = {
         "\"pipe_temperature_c\":null,\"sensor_health\":\"HEALTHY\"",
         "\"pipe_temperature_c\":6.4,\"sensor_health\":\"STALE\"",
@@ -46,6 +61,11 @@ static void temperature_parse_cases(void) {
         "\"pipe_temperature_c\":6.4,\"sensor_health\":null",
         "\"pipe_temperature_c\":6.4,\"sensor_health\":\"HEALTHY\",\"pipe_temperature_c\":6.5",
         "\"pipe_temperature_c\":6.4,\"sensor_health\":\"HEALTHY\",\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":6.4,\"pipe_temperat\\u0075re_c\":6.5,\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperat\\u0075re_c\":6.4,\"pipe_temperature_c\":6.5,\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":6.4,\"sensor_health\":\"HEALTHY\",\"sensor_hea\\u006cth\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":6.4,\"sensor_hea\\u006cth\":\"HEALTHY\",\"sensor_health\":\"HEALTHY\"",
+        "\"pipe_temperature_c\":6.4,\"sensor_hea\\u006dth\":\"HEALTHY\"",
         "\"pipe_temperature_c\":-50.01,\"sensor_health\":\"HEALTHY\"",
         "\"pipe_temperature_c\":120.01,\"sensor_health\":\"HEALTHY\"",
         "\"pipe_temperature_c\":-50.000001,\"sensor_health\":\"HEALTHY\"",

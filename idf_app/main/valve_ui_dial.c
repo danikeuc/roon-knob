@@ -218,7 +218,7 @@ void valve_ui_init(void) {
     lv_obj_center(s_action_label);
     create_shower_symbol();
     s_temperature = lv_label_create(s_overlay);
-    lv_obj_set_pos(s_temperature, 48, 31);
+    lv_obj_set_pos(s_temperature, 90, 31);
     lv_obj_set_style_text_font(s_temperature, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(s_temperature, lv_color_hex(ICON_COLOR), 0);
     render(0);
