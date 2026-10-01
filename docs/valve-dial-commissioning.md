@@ -87,7 +87,7 @@ A 50-second serial observation from `2026-10-01T01:30:05.738586+00:00` to `2026-
 
 Operator-supplied Pi evidence records installed source `7a24387efbbe0772ae88646d1d98182feca43369` and authenticated display JSON reporting `24.212243310943986` degrees C / `HEALTHY`, `manual_timed`, `MANUAL_DRAIN`, zero remaining seconds and no timed deadline. After flash, restricted SSH status independently reported active services and GPIO26/GPIO20 output/high.
 
-The candidate is now flashed and boot-observed. The operator subsequently reported `24,3` on the shower page and no temperature on the Roon page. This confirms the observed decimal-comma value and shower-only placement; no screenshot or exact observation timestamp was provided. The operator then reported `24,4` degrees C on an independent thermometer near PT100, approximately 0.1 degree C above the earlier dial value. This sequential one-point comparison is not calibration; reference identity, uncertainty and stabilization were not recorded. Signed/extreme-value legibility, the degree glyph in isolation, repeated/cold-point comparisons, sensor-fault/stale telemetry fallback and Wi-Fi recovery remain pending. The subsequent Roon check is recorded below. No SUPPLY action or energized valve test was performed in this session. PR #8 remains draft.
+The candidate is now flashed and boot-observed. The operator subsequently reported `24,3` on the shower page and no temperature on the Roon page. This confirms the observed decimal-comma value and shower-only placement; no screenshot or exact observation timestamp was provided. The operator then reported `24,4` degrees C on an independent thermometer near PT100, approximately 0.1 degree C above the earlier dial value. This sequential one-point comparison is not calibration; reference identity, uncertainty and stabilization were not recorded. At this observation point, signed/extreme-value legibility, the degree glyph in isolation, repeated/cold-point comparisons, sensor-fault/stale telemetry fallback and Wi-Fi recovery had not been verified. The later operator decision below updates Wi-Fi and sensor-test status. The subsequent Roon check is recorded below. No SUPPLY action or energized valve test was performed in this session. PR #8 remains draft.
 
 ## Hub service interruption and recovery — operator observation
 
@@ -95,10 +95,27 @@ For the installed Pi source and flashed dial artifact recorded above, the operat
 
 The operator replied `ja vse je delalo tako kot mora` (yes, everything worked as expected), confirming those expected transitions. No console transcript or measured transition latency was supplied for this test; 20 seconds is the prescribed interruption, not an independently measured duration. A subsequent restricted SSH status check independently reported Node-RED, the paired GPIO daemon and Hub active, with GPIO26 and GPIO20 output/high.
 
-This establishes operator-observed Hub/API unavailability and display recovery for this candidate. Sensor-fault or stale telemetry while the API remains reachable, Wi-Fi interruption, process crash/hang and physical valve fault outcomes remain unverified.
+This establishes operator-observed Hub/API unavailability and display recovery for this candidate. At this observation point, sensor-fault or stale telemetry while the API remained reachable, Wi-Fi interruption, process crash/hang and physical valve fault outcomes were unverified. The later Wi-Fi report and test-scope decision below update only their stated scope.
 
 ## Roon and shower-page regression — operator observation
 
 After the Hub recovery test, the operator was asked to switch to Roon, check play/pause, change volume by one encoder step and back, then return to the shower page and check temperature and OFF, keeping 24 V valve power disconnected. The operator replied `vse deluje bp` (everything works without problems), confirming all three checks for the installed Pi source and flashed dial artifact recorded above.
 
 This is operator-observed transport, volume and page-return evidence. No exact observation time, volume values, screenshot or independent bridge trace was supplied. The OFF indicator is UI evidence, not relay-contact or physical valve-position feedback. No SUPPLY action was requested in this check.
+
+## Wi-Fi observation and operator test-scope decision
+
+The operator reported that Wi-Fi interruption worked during several accidental disconnections in the current candidate session. Record Wi-Fi interruption/recovery as `VERIFIED_BY_OPERATOR`. The exact interrupted component, count, duration, transition timing and logs were not supplied; this report does not establish physical valve behavior during an outage.
+
+The operator explicitly chose to skip the sensor-fault test because temperature is informational, and reported that a lower-temperature test is currently not possible. This decision updates the current display-only acceptance scope:
+
+| Check | Status | Basis and limit |
+| --- | --- | --- |
+| Ordinary shower temperature and page placement | VERIFIED_BY_OPERATOR | Earlier shower-only observation; one decimal comma |
+| Hub interruption and display recovery | VERIFIED_BY_OPERATOR | Earlier bounded stop/restart check |
+| Roon play/pause, volume and shower-page return | VERIFIED_BY_OPERATOR | Earlier confirmation of all three checks |
+| Wi-Fi interruption/recovery | VERIFIED_BY_OPERATOR | Operator report of several accidental interruptions |
+| Physical sensor-fault / individual-lead test | SKIPPED_BY_OPERATOR | Waived for the current informational display scope; behavior remains unverified on hardware |
+| Lower-temperature comparison | DEFERRED_UNAVAILABLE | Currently not feasible; accuracy at lower temperatures remains unverified |
+
+Skipped and deferred checks are not passing tests. The sensor-fault test is no longer a required immediate step for this display-only scope; the lower-temperature check is deferred. This decision does not commission automatic control, modify `sensor_commissioned`, or establish hydraulic fault outcomes.
