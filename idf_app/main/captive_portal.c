@@ -1,4 +1,6 @@
 #include "captive_portal.h"
+#include "admin_server_dial.h"
+#include <stdio.h>
 #include "dns_server.h"
 #include "wifi_manager.h"
 #include "controller_config.h"
@@ -130,10 +132,10 @@ static const char *HTML_FORM =
     ".wifi-entry{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #333;}"
     ".wifi-entry:last-child{border-bottom:0;}"
     ".btn-rm{background:#c62828;color:#fff;border:0;border-radius:5px;padding:7px 10px;cursor:pointer;}"
-    "</style></head><body>"
+    "</style><script src='/admin/forms.js' defer></script></head><body>"
     "<h1>HiPhi Dial</h1>"
     "<p>WiFi Setup</p>"
-    "<form method='GET' action='/configure'>"
+    "<form method='POST' action='/configure'>"
     "<label>WiFi Network (SSID)</label>"
     "<input type='text' name='ssid' required maxlength='32' placeholder='Your WiFi name'>"
     "<label>Password</label>"
@@ -159,7 +161,7 @@ static const char *HTML_SUCCESS =
     ".status{padding:20px;margin:20px auto;border-radius:10px;max-width:300px;background:#2e7d32;}"
     ".next{padding:15px;margin:20px auto;border-radius:10px;max-width:300px;background:#16213e;text-align:left;}"
     ".next li{margin:8px 0;}"
-    "</style></head><body>"
+    "</style><script src='/admin/forms.js' defer></script></head><body>"
     "<h1>HiPhi Dial</h1>"
     "<div class='status'>"
     "<p><strong>WiFi credentials saved!</strong></p>"
@@ -258,6 +260,7 @@ static void html_escape(const char *src, char *dst, size_t dst_len) {
 
 // Handler for GET / - serve the config form and recovery removals.
 static esp_err_t root_get_handler(httpd_req_t *req) {
+    if (!admin_http_authorize(req, false)) return ESP_OK;
     ESP_LOGI(TAG, "Serving config form");
 
     controller_config_snapshot_t snapshot = {0};
@@ -299,6 +302,7 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
 }
 
 static esp_err_t wifi_remove_handler(httpd_req_t *req) {
+    if (!admin_http_authorize(req, true)) return ESP_OK;
     char buf[64] = {0};
     int received = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (received <= 0) {
@@ -349,21 +353,24 @@ static esp_err_t wifi_remove_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// Handler for GET /configure - save credentials (GET works better in mobile captive portals)
-static esp_err_t configure_get_handler(httpd_req_t *req) {
-    // Extract query string from URI (after the '?')
-    const char *query = strchr(req->uri, '?');
-    if (!query || !query[1]) {
-        ESP_LOGE(TAG, "No query parameters in: %s", req->uri);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No parameters provided");
+// Credentials are sent only in a protected POST body.
+static esp_err_t configure_post_handler(httpd_req_t *req) {
+    if (!admin_http_authorize(req, true)) return ESP_OK;
+    char buf[384] = {0};
+    if (!req->content_len || req->content_len >= sizeof(buf)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid form");
         return ESP_FAIL;
     }
-    query++;  // Skip the '?'
-
-    // Copy query string to mutable buffer for parsing
-    char buf[384] = {0};
-    strncpy(buf, query, sizeof(buf) - 1);
-    ESP_LOGI(TAG, "Received config: %s", buf);
+    size_t received = 0;
+    while (received < req->content_len) {
+        int n = httpd_req_recv(req, buf + received, req->content_len - received);
+        if (n <= 0) return ESP_FAIL;
+        received += (size_t)n;
+    }
+    if (memchr(buf, '\0', received)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid form");
+        return ESP_FAIL;
+    }
 
     char ssid[33] = {0};
     char pass[65] = {0};
@@ -442,7 +449,7 @@ static esp_err_t configure_get_handler(httpd_req_t *req) {
 
 // Captive portal redirect - send all unknown requests to root
 static esp_err_t captive_redirect_handler(httpd_req_t *req) {
-    ESP_LOGI(TAG, "Redirect request: %s", req->uri);
+    ESP_LOGI(TAG, "Captive redirect");
     httpd_resp_set_status(req, "302 Found");
     httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/");
     httpd_resp_send(req, NULL, 0);
@@ -451,7 +458,7 @@ static esp_err_t captive_redirect_handler(httpd_req_t *req) {
 
 // iOS captive portal detection - must NOT return "Success"
 static esp_err_t ios_captive_handler(httpd_req_t *req) {
-    ESP_LOGI(TAG, "iOS captive portal detection: %s", req->uri);
+    ESP_LOGI(TAG, "iOS captive portal detection");
     // Return a redirect to trigger captive portal popup
     httpd_resp_set_status(req, "302 Found");
     httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/");
@@ -461,7 +468,7 @@ static esp_err_t ios_captive_handler(httpd_req_t *req) {
 
 // Android captive portal detection - must NOT return 204
 static esp_err_t android_captive_handler(httpd_req_t *req) {
-    ESP_LOGI(TAG, "Android captive portal detection: %s", req->uri);
+    ESP_LOGI(TAG, "Android captive portal detection");
     // Return a redirect to trigger captive portal popup
     httpd_resp_set_status(req, "302 Found");
     httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/");
@@ -483,7 +490,7 @@ bool captive_portal_start_locked(void) {
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 12;  // root, configure, 4 captive detection, wildcard
+    config.max_uri_handlers = 28;  // Exact admin routes precede captive wildcard
     config.stack_size = 8192;  // Increased from default 4096 for NVS + UI operations
     // Note: max_req_hdr_len set via CONFIG_HTTPD_MAX_REQ_HDR_LEN in sdkconfig
 
@@ -493,6 +500,8 @@ bool captive_portal_start_locked(void) {
         ESP_LOGE(TAG, "Failed to start HTTP server");
         return false;
     }
+
+    if (admin_server_register(s_server) != ESP_OK) goto fail;
 
     // Register URI handlers
     httpd_uri_t root = {
@@ -504,8 +513,8 @@ bool captive_portal_start_locked(void) {
 
     httpd_uri_t configure = {
         .uri = "/configure",
-        .method = HTTP_GET,
-        .handler = configure_get_handler,
+        .method = HTTP_POST,
+        .handler = configure_post_handler,
     };
     if (!register_uri_handler(&configure)) goto fail;
 

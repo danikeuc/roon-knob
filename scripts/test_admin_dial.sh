@@ -29,3 +29,6 @@ cc -std=c11 -Wall -Wextra -Werror \
 "$tmp_dir/test_crypto"
 
 python3 tests/admin_dial/test_boot_storage.py
+
+# Execute registered STA/AP/admin handlers against the host HTTP transport.
+sh scripts/test_admin_http.sh
