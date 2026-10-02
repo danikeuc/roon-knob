@@ -27,7 +27,6 @@ bool valve_supply_allowed(valve_state_t state, bool configured, bool connected, 
 bool valve_drain_allowed(bool configured, bool connected);
 bool valve_drain_tap_allowed(bool started_on_drain, bool moved,
                              valve_gesture_t gesture, bool configured, bool connected);
-int valve_touch_coordinate(int raw, int rotation);
 typedef struct {
     uint32_t session;
     uint32_t minimum_request_id;

@@ -1,4 +1,7 @@
 #include "valve_ui_dial.h"
+#include "admin_settings_dial.h"
+#include "admin_store_dial.h"
+#include "admin_server_dial.h"
 #include "valve_client_dial.h"
 #include "valve_config_dial.h"
 #include "bridge_command_plan.h"
@@ -16,6 +19,22 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+static admin_settings_t saved_settings={600,0,false,0};
+static uint16_t applied_rotation;
+static bool rotation_override;
+void admin_server_bind_settings(const admin_settings_binding_t *b) {(void)b;}
+esp_err_t admin_store_load(admin_settings_t *out) {*out=saved_settings;return ESP_OK;}
+esp_err_t admin_store_save(const admin_settings_t *value,uint32_t generation) {
+    if(generation!=saved_settings.generation)return ADMIN_ERR_CONFLICT;
+    saved_settings=*value;saved_settings.generation++;return ESP_OK;
+}
+void admin_settings_wait_tick(void) {admin_settings_process_ui();}
+bool platform_display_try_rotation(uint16_t degrees) {applied_rotation=degrees;return true;}
+uint16_t platform_display_rotation_get(void) {return applied_rotation;}
+bool platform_display_rotation_override_get(void) {return rotation_override;}
+void platform_display_rotation_override_set(bool enabled) {rotation_override=enabled;}
+void platform_display_cancel_input(void) {valve_ui_cancel_touch();}
 
 static uint32_t fake_now = 1000;
 static int posts, gets, valve_indicator;
@@ -182,6 +201,15 @@ int main(void) {
     flush();
     assert(strcmp(objects[2].text, "OFF") == 0);
     assert(posts == 0 && gets >= 1);
+    /* Restart/settings restoration cannot manufacture a START. */
+    admin_settings_init();assert(admin_settings_restore()==ADMIN_OK);flush();
+    assert(start_posts==0);
+    /* A rotation interrupts a real partially confirmed valve hold. */
+    valve_ui_touch(100,260,true,false,fake_now);
+    fake_now+=1500;
+    assert(admin_settings_set_rotation(90,0)==ADMIN_OK);
+    valve_ui_touch(100,260,false,false,fake_now);flush();
+    assert(start_posts==0 && applied_rotation==90);
     valve_gesture_context_t media = {0};
     assert(valve_gesture_classify(80, 4, 250, 0, media) == VALVE_GESTURE_SWITCH_SCREEN);
     assert(valve_gesture_classify(4, -80, 250, 0, media) == VALVE_GESTURE_ART_UP);
@@ -264,7 +292,9 @@ int main(void) {
     flush();
     assert(start_posts == 2 && strcmp(objects[5].text, "5:00") == 0);
     assert(valve_client_selected_duration_publish(300));
-    assert(valve_client_selected_duration_publish(600));
+    uint32_t active_deadline=pi_deadline_ms;
+    assert(admin_settings_set_duration(600,1)==ADMIN_OK);
+    assert(pi_deadline_ms==active_deadline);
     flush();
     assert(start_posts == 2 && strcmp(objects[5].text, "5:00") == 0);
     fake_now += 30000; valve_ui_wake(); flush();

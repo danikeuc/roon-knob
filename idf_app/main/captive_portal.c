@@ -1,3 +1,4 @@
+#include "admin_settings_dial.h"
 #include "captive_portal.h"
 #include "admin_server_dial.h"
 #include <stdio.h>
@@ -606,6 +607,7 @@ void captive_portal_stop_locked(void) {
 
     ESP_LOGI(TAG, "Stopping captive portal");
     dns_server_stop();
+    admin_settings_cancel_pending();
     httpd_stop(s_server);
     s_server = NULL;
     http_server_lifecycle_release_locked(HTTP_SERVER_OWNER_CAPTIVE_PORTAL);

@@ -1,8 +1,8 @@
 /* Mocked transport only: no device or private browser profile. */
 const fs = require('fs');
 const assert = require('assert/strict');
-const {chromium} = require('C:/Users/danik/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
-const base = 'C:/users/danik/projects/roon-knob-valves';
+const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const base = require('path').resolve(__dirname, '../..');
 function embedded(name) {
  const h = fs.readFileSync(base+'/idf_app/main/admin_page_dial.h','utf8');
  const text = h.split('static const char '+name+'[] =')[1];
@@ -10,10 +10,10 @@ function embedded(name) {
  return text.split(/;\s*\n/)[0].split('\n').filter(l=>l.trim().startsWith('"')).map(l=>JSON.parse(l.trim())).join('');
 }
 (async()=>{
- const browser=await chromium.launch({executablePath:'C:/Program Files/Google/Chrome/Application/chrome.exe',headless:true});
+ const browser=await chromium.launch({...(process.env.BROWSER_PATH?{executablePath:process.env.BROWSER_PATH}:{}),headless:true});
  const page=await browser.newPage({viewport:{width:390,height:844},isMobile:true});
  let authenticated=false,setup=true,saveCount=0,failSave=false;
- let value={duration_minutes:10,rotation_degrees:0,generation:1};
+ let value={duration_minutes:10,rotation_degrees:0,generation:1,duration_capability_available:true,short_duration_supported:true};
  const calls=[];
  await page.route('**/*',async route=>{
   const request=route.request(),url=new URL(request.url());calls.push(url.pathname);
@@ -51,6 +51,15 @@ function embedded(name) {
  assert(calls.filter(p=>p==='/admin/api/settings').length>=2);
  await page.reload();await page.locator('#shower').waitFor({state:'visible'});assert.equal(await page.locator('#issued-code').textContent(),'');
  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ value={...value,duration_minutes:3,duration_capability_available:false,short_duration_supported:false};
+ await page.reload();await page.locator('#shower').waitFor({state:'visible'});
+ assert.equal(await page.locator('#shower select').inputValue(),'3');
+ assert.equal(await page.locator('#shower option[value="3"]').evaluate(option=>option.disabled),true);
+ assert.equal(await page.locator('#shower button').isDisabled(),true);
+ assert.match(await page.locator('#duration-support').textContent(),/START/);
+ await page.locator('#shower select').selectOption('10');
+ assert.equal(await page.locator('#shower button').isDisabled(),false);
+
 
  // Exercise the shipped legacy form and script, including the clicked button's
  // value (FormData alone omits it) and the session-expired login path.

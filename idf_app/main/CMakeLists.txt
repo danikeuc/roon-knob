@@ -6,6 +6,7 @@ set(SRC_FILES
     "admin_store_dial.c"
     "admin_auth_dial.c"
     "admin_server_dial.c"
+    "admin_settings_dial.c"
     "admin_backend_dial.c"
     "admin_crypto_dial.c"
     "valve_logic.c"

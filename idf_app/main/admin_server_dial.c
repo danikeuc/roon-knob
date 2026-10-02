@@ -327,9 +327,11 @@ static esp_err_t settings_reply(httpd_req_t *req, admin_result_t result,
     if (!value->duration_minutes || value->duration_minutes > 10 ||
         value->rotation_degrees > 270 || value->rotation_degrees % 90)
         return result_reply(req, ADMIN_STORAGE_ERROR);
-    char body[128];
-    snprintf(body, sizeof(body), "{\"duration_minutes\":%u,\"rotation_degrees\":%u,\"generation\":%lu}",
-             value->duration_minutes, value->rotation_degrees, (unsigned long)value->generation);
+    char body[224];
+    snprintf(body, sizeof(body), "{\"duration_minutes\":%u,\"rotation_degrees\":%u,\"generation\":%lu,\"duration_capability_available\":%s,\"short_duration_supported\":%s}",
+             value->duration_minutes, value->rotation_degrees, (unsigned long)value->generation,
+             value->duration_capability_available ? "true" : "false",
+             value->short_duration_supported ? "true" : "false");
     return reply(req, "200 OK", body);
 }
 

@@ -1,3 +1,4 @@
+#include "admin_settings_dial.h"
 // HTTP config server - runs when connected to WiFi for remote configuration
 // Access at http://<knob-ip>/ to set bridge URL
 
@@ -1072,6 +1073,7 @@ void config_server_start(void) {
     return;
 
 registration_failed:
+    admin_settings_cancel_pending();
     httpd_stop(s_server);
     s_server = NULL;
     http_server_lifecycle_release_locked(HTTP_SERVER_OWNER_CONFIG);
@@ -1085,6 +1087,7 @@ void config_server_stop_locked(void) {
     }
 
     ESP_LOGI(TAG, "Stopping config server");
+    admin_settings_cancel_pending();
     httpd_stop(s_server);
     s_server = NULL;
     http_server_lifecycle_release_locked(HTTP_SERVER_OWNER_CONFIG);

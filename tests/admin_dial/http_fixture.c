@@ -398,3 +398,5 @@ int xTaskCreate(void(*f)(void*),const char*n,unsigned s,void*p,unsigned a,void*q
     (void)q;
     return 1;
 }
+
+void admin_settings_cancel_pending(void) {}

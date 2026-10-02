@@ -3,6 +3,8 @@
 #include "display_sleep.h"
 #include "valve_ui_dial.h"
 #include "valve_logic.h"
+#include "display_rotation_dial.h"
+#include "admin_settings_dial.h"
 #include "ui.h"
 #include "bridge_client.h"
 #include "battery.h"
@@ -42,6 +44,8 @@ static int16_t s_touch_last_x, s_touch_last_y;
 static volatile bool s_pending_page_switch = false;
 static volatile bool s_pending_art_mode = false;   // Deferred art mode activation
 static volatile bool s_pending_exit_art_mode = false;  // Deferred art mode exit
+static bool s_local_rotation_override;
+static bool s_touch_until_release;
 static uint16_t s_current_rotation = 0;  // Track rotation for swipe direction transform
 
 // Double-tap detection for art mode toggle
@@ -287,65 +291,32 @@ static uint8_t *s_rotate_buf = NULL;
 #define ROTATE_BUF_ROWS 60
 #define ROTATE_BUF_SIZE (LCD_H_RES * ROTATE_BUF_ROWS * sizeof(uint16_t))
 
-// Simple 180-degree rotation for RGB565 buffer (reverse pixel order)
-static void rotate180_rgb565_simple(const uint16_t *src, uint16_t *dst, int pixel_count) {
-    for (int i = 0; i < pixel_count; i++) {
-        dst[pixel_count - 1 - i] = src[i];
-    }
-}
-
-
-// LVGL flush callback with software rotation support
+/* Rotation scratch is PSRAM, never a DMA source. Split oversized partials;
+ * each tightly packed block is copied back into its original DMA allocation.
+ * IDF 5.5.5 SPI tx_param(-1,NULL,0) drains all queued color transfers without
+ * sending a command. Do not reuse px_map or signal LVGL before that drain. */
 static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
-    esp_lcd_panel_handle_t panel_handle = (esp_lcd_panel_handle_t)lv_display_get_user_data(disp);
-
-    lv_display_rotation_t rotation = lv_display_get_rotation(disp);
-
-    // Get area dimensions
-    const int32_t src_w = lv_area_get_width(area);
-    const int32_t src_h = lv_area_get_height(area);
-    const int pixel_count = src_w * src_h;
-
-    // Calculate output coordinates (may differ for rotation)
-    int32_t out_x1 = area->x1;
-    int32_t out_y1 = area->y1;
-    int32_t out_x2 = area->x2;
-    int32_t out_y2 = area->y2;
-
-    // Handle 180-degree rotation (for "upside down" mounting when charging)
-    // Note: 90/270 rotation not supported due to poor performance (see DECISION_ROTATION.md)
-    if (rotation == LV_DISPLAY_ROTATION_180 && s_rotate_buf != NULL) {
-        // Safety check: ensure flush area fits in rotation buffer
-        const int max_pixels = LCD_H_RES * ROTATE_BUF_ROWS;
-        if (pixel_count > max_pixels) {
-            ESP_LOGE(TAG, "Flush area too large for rotation buffer: %d > %d pixels (%" PRId32 "x%" PRId32 ")",
-                     pixel_count, max_pixels, src_w, src_h);
-            goto skip_rotation;
-        }
-
-        // Rotate pixels: px_map -> s_rotate_buf (in PSRAM)
-        rotate180_rgb565_simple((const uint16_t *)px_map, (uint16_t *)s_rotate_buf, pixel_count);
-
-        // Copy back to px_map (DMA-capable) for LCD transfer
-        memcpy(px_map, s_rotate_buf, pixel_count * sizeof(uint16_t));
-
-        // Mirror coordinates around display center
-        out_x1 = LCD_H_RES - 1 - area->x2;
-        out_x2 = LCD_H_RES - 1 - area->x1;
-        out_y1 = LCD_V_RES - 1 - area->y2;
-        out_y2 = LCD_V_RES - 1 - area->y1;
+    esp_lcd_panel_handle_t panel = lv_display_get_user_data(disp);
+    const int width = lv_area_get_width(area), height = lv_area_get_height(area);
+    ESP_ERROR_CHECK(s_rotate_buf && width > 0 && width <= LCD_H_RES ? ESP_OK : ESP_FAIL);
+    const int rows = (ROTATE_BUF_SIZE / sizeof(uint16_t) / width) & ~1;
+    for (int offset = 0; offset < height; offset += rows) {
+        int count = height - offset < rows ? height - offset : rows;
+        uint16_t *pixels = (uint16_t *)px_map + offset * width;
+        dial_rect_t output;
+        dial_rect_t input = {area->x1, area->y1 + offset, width, count};
+        ESP_ERROR_CHECK(dial_rotation_rect(s_current_rotation, LCD_H_RES, LCD_V_RES,
+                                          input, &output) ? ESP_OK : ESP_FAIL);
+        ESP_ERROR_CHECK(dial_rotation_pixels(s_current_rotation, pixels, width, count,
+                          (uint16_t *)s_rotate_buf, ROTATE_BUF_SIZE / sizeof(uint16_t))
+                          ? ESP_OK : ESP_FAIL);
+        memcpy(pixels, s_rotate_buf, width * count * sizeof(uint16_t));
+        for (int i = 0; i < width * count; i++)
+            pixels[i] = (pixels[i] >> 8) | (pixels[i] << 8);
+        ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(panel, output.x, output.y,
+                         output.x + output.width, output.y + output.height, pixels));
+        ESP_ERROR_CHECK(esp_lcd_panel_io_tx_param(s_io_handle, -1, NULL, 0));
     }
-skip_rotation:
-
-    // Swap bytes for big-endian QSPI display (SH8601 expects big-endian RGB565)
-    uint16_t *pixels = (uint16_t *)px_map;
-    for (int i = 0; i < pixel_count; i++) {
-        pixels[i] = (pixels[i] >> 8) | (pixels[i] << 8);
-    }
-
-    esp_lcd_panel_draw_bitmap(panel_handle, out_x1, out_y1, out_x2 + 1, out_y2 + 1, px_map);
-
-    // MUST call flush_ready here - the notify callback doesn't work properly with LVGL 9.x
     lv_display_flush_ready(disp);
 }
 
@@ -360,6 +331,20 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
     uint16_t x, y;
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
     if (tpGetCoordinates(&x, &y)) {
+        if (admin_settings_input_blocked() || s_touch_until_release) {
+            s_touch_until_release = true;
+            data->state = LV_INDEV_STATE_RELEASED;
+            return;
+        }
+        /* LVGL remains at rotation zero: this is the only inverse transform,
+         * shared by Roon widgets, gestures, and the valve modal. */
+        dial_point_t logical;
+        if (!dial_rotation_touch(s_current_rotation, LCD_H_RES, LCD_V_RES,
+                                 (dial_point_t){x, y}, &logical)) {
+            data->state = LV_INDEV_STATE_RELEASED;
+            return;
+        }
+        x = logical.x; y = logical.y;
         display_state_t state = display_get_state();
         if (!s_touch_tracking) {
             s_touch_start_x = x;
@@ -389,7 +374,7 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
             .wake_touch = s_touch_wake,
         };
         valve_gesture_t gesture = valve_gesture_classify(dx, dy,
-            now_ms - (uint32_t)s_touch_start_time, s_current_rotation, context);
+            now_ms - (uint32_t)s_touch_start_time, 0, context);
         if (!s_touch_consumed && gesture == VALVE_GESTURE_SWITCH_SCREEN) {
             s_touch_consumed = true;
             s_pending_page_switch = true;
@@ -399,8 +384,7 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
         }
         if (s_touch_started_on_valve) {
             if (!s_touch_consumed)
-                valve_ui_touch(valve_touch_coordinate(x, s_current_rotation),
-                               valve_touch_coordinate(y, s_current_rotation),
+                valve_ui_touch(x, y,
                                true, abs(dx) > 20 || abs(dy) > 20, now_ms);
             data->state = LV_INDEV_STATE_RELEASED;
         } else {
@@ -408,6 +392,7 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
         }
         return;
     }
+    s_touch_until_release = false;
     /* Use the last real touch coordinate; LVGL's release point may be stale. */
     data->point.x = s_touch_last_x;
     data->point.y = s_touch_last_y;
@@ -423,7 +408,7 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
         .wake_touch = s_touch_wake,
     };
     valve_gesture_t gesture = valve_gesture_classify(dx, dy, elapsed,
-                                                      s_current_rotation, context);
+                                                      0, context);
     if (gesture == VALVE_GESTURE_SWITCH_SCREEN && !s_touch_consumed) {
         s_touch_consumed = true;
         s_pending_page_switch = true;
@@ -431,8 +416,7 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
     }
     if (s_touch_started_on_valve) {
         if (!s_touch_consumed && !s_touch_wake)
-            valve_ui_touch(valve_touch_coordinate(s_touch_last_x, s_current_rotation),
-                           valve_touch_coordinate(s_touch_last_y, s_current_rotation),
+            valve_ui_touch(s_touch_last_x, s_touch_last_y,
                            false,
                            abs(dx) > 20 || abs(dy) > 20, now_ms);
         else valve_ui_cancel_touch();
@@ -572,7 +556,8 @@ bool platform_display_register_lvgl_driver(void) {
     // We'll copy back to the DMA-capable px_map buffer before sending to LCD
     s_rotate_buf = heap_caps_malloc(ROTATE_BUF_SIZE, MALLOC_CAP_SPIRAM);
     if (!s_rotate_buf) {
-        ESP_LOGW(TAG, "Failed to allocate rotation buffer - rotation disabled");
+        ESP_LOGE(TAG, "Failed to allocate required rotation buffer");
+        return false;
     } else {
         ESP_LOGI(TAG, "Allocated %d bytes for rotation buffer in PSRAM", ROTATE_BUF_SIZE);
     }
@@ -655,28 +640,37 @@ void platform_display_process_pending(void) {
     display_process_pending();
 }
 
+void platform_display_cancel_input(void) {
+    valve_ui_cancel_touch();
+    if (s_touch_indev) lv_indev_reset(s_touch_indev, NULL);
+    s_touch_tracking = false;
+    s_touch_consumed = true;
+    s_touch_until_release = true;
+    s_pending_page_switch = false;
+    s_pending_art_mode = false;
+    s_pending_exit_art_mode = false;
+    s_last_tap_time = 0;
+}
+
+bool platform_display_try_rotation(uint16_t degrees) {
+    if (!platform_display_is_ready() || !s_rotate_buf || degrees > 270 || degrees % 90)
+        return false;
+    platform_display_cancel_input();
+    s_current_rotation = degrees;
+    /* Software rotation owns pixels and input; enabling LVGL rotation would
+     * apply a second inverse pointer transform. Square logical size is fixed. */
+    lv_display_set_rotation(s_display, LV_DISPLAY_ROTATION_0);
+    lv_obj_invalidate(lv_screen_active());
+    return true;
+}
+uint16_t platform_display_rotation_get(void) { return s_current_rotation; }
+bool platform_display_rotation_override_get(void) { return s_local_rotation_override; }
+void platform_display_rotation_override_set(bool enabled) { s_local_rotation_override = enabled; }
 void platform_display_set_rotation(uint16_t degrees) {
-    if (!s_display) {
-        ESP_LOGW(TAG, "Cannot set rotation - display not initialized");
-        return;
-    }
-
-    // Only 0 and 180 are supported - 90/270 have poor performance due to
-    // cache-unfriendly memory access patterns (see DECISION_ROTATION.md)
-    lv_display_rotation_t rotation;
-    if (degrees == 180) {
-        rotation = LV_DISPLAY_ROTATION_180;
-        s_current_rotation = 180;
-    } else {
-        if (degrees != 0) {
-            ESP_LOGW(TAG, "Rotation %d not supported (only 0/180), using 0", degrees);
-        }
-        rotation = LV_DISPLAY_ROTATION_0;
-        s_current_rotation = 0;
-    }
-
-    ESP_LOGI(TAG, "Setting display rotation to %d degrees", s_current_rotation);
-    lv_display_set_rotation(s_display, rotation);
+    if (s_local_rotation_override || admin_settings_input_blocked()) return;
+    /* Preserve legacy bridge/charger semantics until the first local save. */
+    uint16_t legacy = degrees == 180 ? 180 : 0;
+    if (legacy != s_current_rotation) (void)platform_display_try_rotation(legacy);
 }
 
 void platform_display_apply_config(const rk_cfg_t *cfg, bool is_charging) {

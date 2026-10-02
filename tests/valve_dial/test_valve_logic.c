@@ -371,8 +371,9 @@ static void dial_cases(void) {
     assert(!valve_drain_tap_allowed(true, true, VALVE_GESTURE_SWITCH_SCREEN, true, true));
     assert(!valve_drain_tap_allowed(false, false, VALVE_GESTURE_NONE, true, true));
     assert(!valve_drain_tap_allowed(true, false, VALVE_GESTURE_NONE, true, false));
-    assert(valve_touch_coordinate(180, 0) == 180);
-    assert(valve_touch_coordinate(70, 180) == 289);
+    valve_gesture_context_t normal_context = {0};
+    assert(valve_gesture_classify(80, 0, 200, 90, normal_context) == VALVE_GESTURE_ART_UP);
+    assert(valve_gesture_classify(-80, 0, 200, 270, normal_context) == VALVE_GESTURE_ART_UP);
 }
 static void config_change_cases(void) {
     valve_client_on_reconnect(); valve_client_test_run_pending();

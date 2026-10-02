@@ -15,6 +15,8 @@ typedef struct {
     uint16_t duration_minutes;       /* 1..10 */
     uint16_t rotation_degrees;       /* effective 0/90/180/270, including legacy */
     uint32_t generation;
+    bool duration_capability_available;
+    bool short_duration_supported;
 } admin_http_settings_t;
 typedef struct {
     admin_result_t (*read)(admin_http_settings_t *out);

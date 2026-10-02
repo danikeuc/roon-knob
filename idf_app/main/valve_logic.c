@@ -303,7 +303,11 @@ valve_gesture_t valve_gesture_classify(int dx, int dy, uint32_t elapsed_ms,
                                        int rotation, valve_gesture_context_t context) {
     if (context.wake_touch || context.zone_picker || context.settings || elapsed_ms > 500)
         return VALVE_GESTURE_NONE;
-    if (rotation == 180) { dx = -dx; dy = -dy; }
+    int physical_dx = dx;
+    if (rotation == 90) { dx = dy; dy = -physical_dx; }
+    else if (rotation == 180) { dx = -dx; dy = -dy; }
+    else if (rotation == 270) { dx = -dy; dy = physical_dx; }
+    else if (rotation != 0) return VALVE_GESTURE_NONE;
     if (abs(dx) >= 60 && abs(dx) > abs(dy) && !context.art_mode)
         return VALVE_GESTURE_SWITCH_SCREEN;
     if (abs(dy) >= 60 && abs(dy) > abs(dx))
@@ -331,9 +335,6 @@ bool valve_drain_tap_allowed(bool started_on_drain, bool moved,
                              valve_gesture_t gesture, bool configured, bool connected) {
     return started_on_drain && !moved && gesture == VALVE_GESTURE_NONE &&
            valve_drain_allowed(configured, connected);
-}
-int valve_touch_coordinate(int raw, int rotation) {
-    return rotation == 180 ? 359 - raw : raw;
 }
 void valve_gate_link(valve_observation_gate_t *gate, uint32_t session) {
     if (!gate) return;

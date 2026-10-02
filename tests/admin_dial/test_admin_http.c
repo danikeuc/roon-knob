@@ -264,7 +264,7 @@ static void test_settings_binding_and_protected_api(void) {
     };
     admin_server_bind_settings(&binding);
     binding_value=(admin_http_settings_t) {
-        3,90,8
+        3,90,8,true,true
     };
     binding_result=ADMIN_OK;
     for(size_t i=0;i<2;i++) {
@@ -274,6 +274,7 @@ static void test_settings_binding_and_protected_api(void) {
         fixture_call(&r);
         assert(fixture_status(&r)==200);
         assert(strstr(r.response,"\"generation\":8"));
+        assert(strstr(r.response,"\"short_duration_supported\":true"));
     }
     binding_result=ADMIN_CONFLICT;
     r=fixture_request("/admin/api/shower",HTTP_POST,"{\"duration_minutes\":3,\"generation\":7}");

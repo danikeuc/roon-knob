@@ -7,6 +7,11 @@ cc -std=c11 -Wall -Wextra -Werror -Iidf_app/main \
     tests/admin_dial/test_display_rotation.c idf_app/main/display_rotation_dial.c \
     -o "$tmp_dir/test_display_rotation"
 "$tmp_dir/test_display_rotation"
+cc -std=c11 -Wall -Wextra -Werror -pthread -DADMIN_SETTINGS_HOST_TEST \
+    -Itests/admin_dial/http_fakes -Itests/admin_dial/fakes -Iidf_app/main \
+    tests/admin_dial/test_admin_settings.c idf_app/main/admin_settings_dial.c \
+    -o "$tmp_dir/test_settings"
+"$tmp_dir/test_settings"
 for suite in store auth; do
     extra_source=""
     if [ "$suite" = auth ]; then extra_source="idf_app/main/admin_store_dial.c"; fi
@@ -33,6 +38,8 @@ cc -std=c11 -Wall -Wextra -Werror \
 "$tmp_dir/test_crypto"
 
 python3 tests/admin_dial/test_boot_storage.py
+python3 tests/admin_dial/test_driver_rotation.py
+python3 tests/admin_dial/test_driver_input.py
 
 # Execute registered STA/AP/admin handlers against the host HTTP transport.
 sh scripts/test_admin_http.sh
