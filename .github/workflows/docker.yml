@@ -287,6 +287,28 @@ jobs:
             -o /tmp/test-rk-ble-hid-stub
           /tmp/test-rk-ble-hid-stub
 
+  test-dial-admin:
+    name: test-dial-admin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Test Dial admin and valve contracts with ESP-IDF 5.5.5
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.5
+          target: esp32s3
+          path: idf_app
+          command: >-
+            set -eu;
+            test "$(idf.py --version)" = "ESP-IDF v5.5.5";
+            cd ..;
+            test -f "$IDF_PATH/components/mbedtls/mbedtls/library/pkcs5.c";
+            sh scripts/test_admin_dial.sh;
+            sh scripts/test_valve_dial.sh
+
   build-idf:
     name: build-idf
     runs-on: ubuntu-latest

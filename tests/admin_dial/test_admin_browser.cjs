@@ -22,10 +22,12 @@ function embedded(name) {
   if(url.pathname==='/admin/forms.js')return route.fulfill({contentType:'application/javascript',body:embedded('ADMIN_FORMS_JS')});
   let data={};const op=url.pathname.split('/').pop();
   if(op==='session')data={setup_required:setup,authenticated,...(authenticated?{csrf:'c'.repeat(64)}:{})};
-  else if(op==='settings')data=value;
-  else if(op==='setup'||op==='recover'||op==='recovery-code'){data={recovery_code:'b'.repeat(32)};setup=false;}
+  else if(op==='settings'){if(!authenticated)return route.fulfill({status:401,contentType:'application/json',body:'{}'});data=value;}
+  else if(op==='setup'||op==='recover'||op==='recovery-code'){data={recovery_code:(op==='recovery-code'?'d':'b').repeat(32)};setup=false;}
   else if(op==='login')authenticated=true;
+  else if(op==='logout')authenticated=false;
   else if(op==='shower'||op==='rotation'){
+   if(!authenticated)return route.fulfill({status:401,contentType:'application/json',body:'{}'});
    assert.equal(request.headers()['x-csrf-token'],'c'.repeat(64));saveCount++;
    const posted=request.postDataJSON();value={...value,...posted,generation:value.generation+1};
    await new Promise(r=>setTimeout(r,180));
@@ -59,6 +61,28 @@ function embedded(name) {
  assert.match(await page.locator('#duration-support').textContent(),/START/);
  await page.locator('#shower select').selectOption('10');
  assert.equal(await page.locator('#shower button').isDisabled(),false);
+ // Expire the session while settings remain visible, then submit a mutation.
+ authenticated=false;await page.locator('#shower button').click();
+ await page.locator('#login').waitFor({state:'visible'});
+ assert.equal(await page.locator('#settings').isVisible(),false);
+ assert.equal(await page.locator('#issued-code').textContent(),'');
+ assert.equal(await page.evaluate(()=>csrf),'');
+ assert.equal(await page.evaluate(()=>generation),null);
+ assert.equal(await page.locator('#pin input[name=pin]').inputValue(),'');
+ assert.equal(await page.locator('#shower select').inputValue(),'');
+ // Reissue a code and log out before pressing the acknowledgement button.
+ await page.locator('#login input[name=pin]').fill('0123');await page.locator('#login button').click();
+ await page.locator('#settings').waitFor({state:'visible'});
+ await page.locator('#recovery-code input[name=pin]').fill('0123');await page.locator('#recovery-code button').click();
+ await page.locator('#recovery-once').waitFor({state:'visible'});
+ assert.equal(await page.locator('#issued-code').textContent(),'d'.repeat(32));
+ await page.locator('#logout button').click();await page.locator('#login').waitFor({state:'visible'});
+ assert.equal(await page.locator('#settings').isVisible(),false);
+ assert.equal(await page.locator('#recovery-once').isVisible(),false);
+ assert.equal(await page.locator('#issued-code').textContent(),'');
+ assert.equal(await page.evaluate(()=>csrf),'');
+ assert.equal(await page.evaluate(()=>generation),null);
+ assert.equal(await page.locator('#recovery-code input[name=pin]').inputValue(),'');
 
 
  // Exercise the shipped legacy form and script, including the clicked button's
