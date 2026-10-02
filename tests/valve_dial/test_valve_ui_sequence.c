@@ -387,10 +387,13 @@ int main(void) {
     assert(strcmp(temperature->text, "6,4 °C") == 0);
     /* Saved short duration without a fresh capability cannot authorize START. */
     valve_ui_cancel_touch();
-    selected_duration = 300;
+    selected_duration = 180;
     healthy.timed_shower_duration_supported = false;
     valve_ui_set_status(&healthy);
-    assert(strcmp(objects[5].text, "HOLD 2s\n5 MIN") == 0);
+    assert(strcmp(objects[5].text, "BLOCKED\n3 MIN") == 0);
+    assert(strcmp(objects[3].text, "Pi: 10 min only") == 0);
+    assert(objects[4].state & LV_STATE_DISABLED);
+    assert(selected_duration == 180);
     bool supported = true;
     assert(valve_ui_duration_capability_get(&supported) && !supported);
     int before_short = posts;
@@ -401,13 +404,17 @@ int main(void) {
     healthy.timed_shower_duration_supported = true;
     valve_ui_set_status(&healthy);
     assert(valve_ui_duration_capability_get(&supported) && supported);
+    assert(strcmp(objects[5].text, "HOLD 2s\n3 MIN") == 0);
+    assert(strcmp(objects[3].text, "") == 0);
+    assert(!(objects[4].state & LV_STATE_DISABLED));
+    assert(posts == before_short && selected_duration == 180);
     valve_duration_capability_snapshot_t snapshot;
     assert(valve_ui_duration_capability_snapshot_get(&snapshot));
     assert(snapshot.valid && snapshot.supported && snapshot.session == session &&
            snapshot.config_generation == config_generation && snapshot.received_at_ms == fake_now);
     valve_ui_touch(100, 260, true, false, fake_now);
     valve_ui_touch(100, 260, true, false, fake_now + 2000);
-    assert(posts == before_short + 1 && last_duration == 300);
+    assert(posts == before_short + 1 && last_duration == 180);
     assert(valve_ui_duration_capability_snapshot_get(&snapshot) && !snapshot.valid);
     valve_ui_cancel_touch();
     healthy.timed_shower_duration_supported = true;
@@ -415,6 +422,9 @@ int main(void) {
     fake_now += 11000;
     process();
     assert(!valve_ui_duration_capability_get(&supported));
+    assert(strcmp(objects[3].text, "Checking Pi...") == 0 ||
+           strcmp(objects[3].text, "Status unavailable") == 0);
+    assert(selected_duration == 180);
     int before_stale = posts;
     valve_ui_touch(100, 260, true, false, fake_now);
     valve_ui_touch(100, 260, true, false, fake_now + 2000);

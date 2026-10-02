@@ -182,6 +182,7 @@ static void create_shower_symbol(void) {
 static void render(uint32_t now_ms) {
     if (!s_overlay) return;
     bool current = fresh(now_ms);
+    lv_obj_align(s_countdown, LV_ALIGN_TOP_MID, 0, 40);
     char temperature_text[32];
     valve_temperature_format(current ? &s_status : NULL, temperature_text,
                              sizeof temperature_text);
@@ -200,9 +201,17 @@ static void render(uint32_t now_ms) {
         lv_label_set_text(s_countdown, "");
         uint16_t seconds;
         char label[32];
-        if (valve_client_selected_duration_get(&seconds))
-            snprintf(label, sizeof label, "HOLD 2s\n%u MIN", seconds / 60);
-        else snprintf(label, sizeof label, "LOADING");
+        if (valve_client_selected_duration_get(&seconds)) {
+            bool unsupported = seconds < 600 && !s_status.timed_shower_duration_supported;
+            snprintf(label, sizeof label, "%s\n%u MIN",
+                     unsupported ? "BLOCKED" : "HOLD 2s", seconds / 60);
+            if (unsupported) {
+                /* Keep the saved duration visible; explain the disabled action
+                 * below it without covering the temperature/status row. */
+                lv_label_set_text(s_countdown, "Pi: 10 min only");
+                lv_obj_align(s_countdown, LV_ALIGN_TOP_MID, 0, 304);
+            }
+        } else snprintf(label, sizeof label, "LOADING");
         lv_label_set_text(s_action_label, label);
         lv_obj_add_flag(s_rain, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_snow, LV_OBJ_FLAG_HIDDEN);

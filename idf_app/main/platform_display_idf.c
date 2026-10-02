@@ -284,9 +284,9 @@ static void lvgl_rounder_cb(lv_event_t *e) {
     area->y2 = ((area->y2 >> 1) << 1) + 1;
 }
 
-// Static rotation buffer - sized to handle LVGL's combined flushes when rotation
-// is enabled. Observed max: 54 rows. Using 60 rows with margin.
-// (360 x 60 x 2 = 43200 bytes - fits in internal DMA-capable RAM)
+// PSRAM rotation scratch: 360 x 60 x 2 = 43,200 bytes. Oversized partials
+// are split into blocks; each block is copied into the original internal DMA
+// draw buffer before transfer. This scratch allocation is never a DMA source.
 static uint8_t *s_rotate_buf = NULL;
 #define ROTATE_BUF_ROWS 60
 #define ROTATE_BUF_SIZE (LCD_H_RES * ROTATE_BUF_ROWS * sizeof(uint16_t))
