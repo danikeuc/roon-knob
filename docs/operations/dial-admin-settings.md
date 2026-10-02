@@ -3,9 +3,10 @@
 **Status:** issue #9 / draft PR #10 software candidate. No image from this
 feature branch has been flashed or accepted on hardware. This page covers
 PIN/recovery, shower duration and rollback for the Waveshare ESP32-S3 Dial
-candidate built with ESP-IDF 5.5.5. Rotation scope awaits user clarification;
-this page makes no rotation acceptance claim. Historical v1.0.0 observations
-remain scoped to the older artifact in [the release record](../releases/v1.0.0.md).
+candidate built with ESP-IDF 5.5.5. The user explicitly confirmed
+0°, 90°, 180° and 270° for this candidate. Device performance and
+interaction acceptance at those angles remain pending. Historical v1.0.0
+observations remain scoped to the older artifact in [the release record](../releases/v1.0.0.md).
 
 ## Phone setup on the trusted LAN
 
@@ -39,6 +40,27 @@ persistent established marker may also need deliberate recovery; a missing
 credential record must not reopen setup. Firmware boot does not silently erase
 NVS on initialization failure. Never use a whole-chip erase as routine
 reinstall or rollback.
+
+## Local display rotation
+
+The authenticated phone page offers 0°, 90°, 180° and 270°. The candidate
+stores the chosen angle as a local override. Before an override is saved, the
+existing bridge/charger path retains its legacy 0°/180° behavior; afterward
+that path does not replace the locally saved angle. A confirmed save applies
+the new angle to the display and its inverse touch coordinates, so touch,
+swipes and valve/Roon gestures use the same orientation. An in-progress touch
+or valve hold is cancelled during a change and stays suppressed until release;
+changing rotation must not issue START or alter an active Pi deadline.
+
+The source uses bounded rotation geometry and PSRAM scratch, then copies each
+rotated block back into the internal DMA-capable display buffer and drains the
+LCD transaction before that buffer is reused. The PSRAM scratch is not handed
+to DMA. Host tests cover all four transforms, production flush/input functions
+with faked LCD/touch, and settings application/rollback. These checks do not
+measure real frame time, UI responsiveness, heap or stack on the Dial. Keep the
+candidate draft if the screen freezes or the memory gate fails at any angle.
+The [rotation decision](../meta/decisions/2025-12-20_DECISION_ROTATION.md)
+retains its historical 0°/180° rationale and records this candidate update.
 
 ## Pi compatibility and safe use
 
@@ -79,6 +101,11 @@ baseline identities are in the separately generated candidate manifest.
 - On a phone: initial zero PIN, login/logout, timeout, lockout across restart,
   single-use recovery and lost reply, plus retention of existing Wi-Fi/Roon and
   valve configuration. Do not record real credentials in the evidence.
+- At 0°, 90°, 180° and 270° on the exact image: check Roon controls and
+  artwork, swipes, touch, valve hold cancellation, overlays and charger
+  behavior. Record free heap/stack and compare 90°/270° flush time and response
+  against 0°/180°, with user acceptance. A host test or compile does not pass
+  this physical gate.
 - In a separately approved disconnected-load envelope: one- and ten-minute Pi
   intervals, no extension on repeated START, next-interval setting update,
   early DRAIN, request/response/deadline and paired GPIO trace. These do not
