@@ -75,6 +75,16 @@ Early DRAIN remains available. An accepted HTTP request or GPIO readback does
 not prove valve movement. The Pi paired daemon remains the only GPIO writer.
 Its legal requested pair levels are high/high DRAIN and low/low SUPPLY.
 
+The Dial records monotonic time when it queues START. Its worker rejects an
+unsent START at age 10,000 ms or more, including when the deadline is crossed
+while fetching preflight status. A backwards clock also rejects START. Rejection
+is reported as a timeout; DRAIN has no age limit. Disconnect clears queued
+commands, and reconnect fetches status without replaying START. Once POST has
+been handed to the transport, a later response is reconciled even if the Dial
+clock passes 10 seconds. This Dial guard cannot impose a network delivery
+deadline or cancel a Pi interval that was already accepted. The Pi timer keeps
+its original deadline through ordinary Dial Wi-Fi loss.
+
 ## Candidate install and rollback preparation
 
 Before any separately authorized flash, save the current Dial NVS/config using

@@ -41,6 +41,8 @@ void valve_client_on_disconnect(void);
 void valve_client_on_reconnect(void);
 #ifdef VALVE_CLIENT_HOST_TEST
 void valve_client_test_transport(valve_client_transport_fn transport, void *context);
+/* NULL restores the host default. Used to drive the queued-work clock in tests. */
+void valve_client_test_clock(uint64_t (*clock_ms)(void));
 void valve_client_test_run_pending(void);
 /* Simulates a delayed durable load through the production CAS path. */
 void valve_client_test_finish_duration_load(uint16_t seconds);

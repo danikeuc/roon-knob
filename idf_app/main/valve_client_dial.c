@@ -9,6 +9,7 @@
 #ifndef VALVE_CLIENT_HOST_TEST
 #include <esp_http_client.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
@@ -19,6 +20,7 @@
 #define STATUS_ROUTE "/api/v1/display/status"
 #define START_ROUTE "/api/v1/display/actions/timed-shower"
 #define DRAIN_ROUTE "/api/v1/display/actions/drain"
+#define START_MAX_QUEUED_MS UINT64_C(10000)
 
 typedef struct work_item {
     bool post;
@@ -26,11 +28,18 @@ typedef struct work_item {
     uint32_t session;
     uint32_t config_generation;
     uint32_t request_id;
+    uint64_t enqueued_ms;
 } work_item_t;
 static bool s_connected;
 static uint32_t s_session;
 static uint32_t s_next_request_id;
 static atomic_uint s_selected_duration = ATOMIC_VAR_INIT(0);
+#ifdef VALVE_CLIENT_HOST_TEST
+static uint64_t (*s_test_clock_ms)(void);
+static uint64_t monotonic_ms(void) { return s_test_clock_ms ? s_test_clock_ms() : 0; }
+#else
+static uint64_t monotonic_ms(void) { return (uint64_t)(esp_timer_get_time() / 1000); }
+#endif
 bool valve_client_selected_duration_get(uint16_t *seconds) {
     unsigned value = atomic_load(&s_selected_duration);
     if (!seconds || value < 60 || value > 600 || value % 60) return false;
@@ -93,6 +102,7 @@ static bool prepare_work(bool post, const valve_request_t *request, work_item_t 
         work->session = s_session;
         work->config_generation = valve_config_generation();
         work->request_id = ++s_next_request_id;
+        work->enqueued_ms = monotonic_ms();
         if (work->request_id == 0) work->request_id = ++s_next_request_id;
         if (request_id) *request_id = work->request_id;
     }
@@ -110,6 +120,11 @@ static bool work_allowed(const work_item_t *item) {
            !(item->config_generation & 1u) &&
            item->config_generation == valve_config_generation();
 }
+static bool start_expired(const work_item_t *item) {
+    if (!item || !item->post || item->request.action != VALVE_ACTION_START) return false;
+    uint64_t now = monotonic_ms();
+    return now < item->enqueued_ms || now - item->enqueued_ms >= START_MAX_QUEUED_MS;
+}
 
 #ifdef VALVE_CLIENT_HOST_TEST
 static valve_client_transport_fn s_transport;
@@ -121,6 +136,7 @@ void valve_client_test_finish_duration_load(uint16_t seconds) { finish_duration_
 void valve_client_test_transport(valve_client_transport_fn transport, void *context) {
     s_transport = transport; s_transport_context = context;
 }
+void valve_client_test_clock(uint64_t (*clock_ms)(void)) { s_test_clock_ms = clock_ms; }
 #else
 static QueueHandle_t s_queue;
 static TaskHandle_t s_worker;
@@ -235,6 +251,7 @@ static valve_client_result_t post_snapshot(const valve_request_t *action, valve_
             if (n < 0 || (size_t)n >= sizeof body) return VALVE_CLIENT_INVALID;
             body_len = (size_t)n;
         } else if (action->duration_seconds != 600) return VALVE_CLIENT_INVALID;
+        if (start_expired(work)) return VALVE_CLIENT_TIMEOUT;
     }
     valve_client_result_t result = request("POST", route, body_len ? body : NULL,
                                            body_len, false, out, credentials);
@@ -267,8 +284,15 @@ static void dispatch(const work_item_t *work) {
     uint32_t current;
     if (!session_snapshot(&current)) goto done;
     valve_status_t status;
-    valve_client_result_t result = work->post ? post_snapshot(&work->request, &status, &credentials, work)
-        : request("GET", STATUS_ROUTE, NULL, 0, true, &status, &credentials);
+    valve_client_result_t result;
+    if (start_expired(work)) {
+        memset(&status, 0, sizeof status);
+        status.state = VALVE_UNKNOWN;
+        result = VALVE_CLIENT_TIMEOUT;
+    } else {
+        result = work->post ? post_snapshot(&work->request, &status, &credentials, work)
+            : request("GET", STATUS_ROUTE, NULL, 0, true, &status, &credentials);
+    }
     if (!work_allowed(work)) goto done;
     if (s_callback) {
         valve_client_event_t event = {.result = result, .status = status,

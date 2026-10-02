@@ -44,6 +44,7 @@ static lv_obj_t screen;
 struct fake_queue { unsigned capacity, count, head; size_t item_size; unsigned char data[4][256]; };
 static struct fake_queue queue;
 int64_t esp_timer_get_time(void) { return (int64_t)fake_now * 1000; }
+static uint64_t client_clock(void) { return fake_now; }
 QueueHandle_t xQueueCreate(unsigned capacity, size_t item_size) {
     assert(capacity == 4 && item_size <= 256);
     queue = (struct fake_queue){.capacity = capacity, .item_size = item_size};
@@ -192,6 +193,7 @@ static void flush(void) {
     valve_ui_process(fake_now, true);
 }
 int main(void) {
+    valve_client_test_clock(client_clock);
     valve_client_test_transport(fake_pi_transport, NULL);
     assert(valve_client_selected_duration_publish(600));
     valve_ui_init();
@@ -232,6 +234,11 @@ int main(void) {
     assert(strcmp(request_trace + strlen(request_trace) - 2, "SG") == 0);
     assert(strcmp(objects[2].text, "ON") == 0);
     assert(strcmp(objects[5].text, "10:00") == 0);
+    uint32_t accepted_deadline = pi_deadline_ms;
+    valve_client_on_disconnect(); valve_ui_connected(false);
+    assert(pi_deadline_ms == accepted_deadline && start_posts == 1 && drain_posts == 0);
+    valve_client_on_reconnect(); valve_ui_connected(true); flush();
+    assert(pi_deadline_ms == accepted_deadline && start_posts == 1 && drain_posts == 0);
     fake_now += 30000; valve_ui_wake(); flush();
     assert(strcmp(objects[5].text, "9:30") == 0);
     assert(bridge_posts == 0 && !bridge_playing);

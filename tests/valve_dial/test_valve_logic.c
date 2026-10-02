@@ -184,6 +184,11 @@ bool valve_config_load(char *url, size_t ul, char *token, size_t tl) {
 static int next_status = 200, post_status, posts, gets, fail_transport, disconnect_during_request;
 static int change_config_during_request;
 static int reconnect_on_get, callbacks, recovery_callbacks;
+static uint64_t client_now_ms;
+static uint64_t client_clock(void) { return client_now_ms; }
+static uint64_t advance_on_preflight_ms;
+static uint64_t advance_on_post_ms;
+static const char *expected_post_route;
 static char trace[256];
 static int mock_transport(const char *method, const char *url, const char *token,
                           const char *request_body, size_t request_len,
@@ -194,11 +199,20 @@ static int mock_transport(const char *method, const char *url, const char *token
     if (strcmp(method, "POST") == 0) {
         assert(request_len == 0 || (request_body && request_len == strlen(request_body)));
         posts++;
-        assert(strcmp(url, posts == 1 ? "http://192.0.2.10:8081/api/v1/display/actions/timed-shower"
-                                      : "http://192.0.2.10:8081/api/v1/display/actions/drain") == 0);
+        assert(strcmp(url, "http://192.0.2.10:8081/api/v1/display/actions/timed-shower") == 0 ||
+               strcmp(url, "http://192.0.2.10:8081/api/v1/display/actions/drain") == 0);
+        if (expected_post_route) assert(strcmp(url, expected_post_route) == 0);
         strcat(trace, "P");
     } else { gets++; assert(request_len == 0 && strcmp(method, "GET") == 0);
         assert(strcmp(url, "http://192.0.2.10:8081/api/v1/display/status") == 0); strcat(trace, "G"); }
+    if (strcmp(method, "GET") == 0 && advance_on_preflight_ms) {
+        client_now_ms += advance_on_preflight_ms;
+        advance_on_preflight_ms = 0;
+    }
+    if (strcmp(method, "POST") == 0 && advance_on_post_ms) {
+        client_now_ms += advance_on_post_ms;
+        advance_on_post_ms = 0;
+    }
     if (disconnect_during_request) {
         disconnect_during_request = 0;
         valve_client_on_disconnect();
@@ -230,16 +244,19 @@ static void request_cases(void) {
     assert(valve_client_get_status(&s) == VALVE_CLIENT_TIMEOUT && s.state == VALVE_UNKNOWN);
     fail_transport = 0;
     posts = gets = 0; trace[0] = 0;
+    expected_post_route = "http://192.0.2.10:8081/api/v1/display/actions/timed-shower";
     assert(valve_client_post(&start, &s) == VALVE_CLIENT_OK);
     assert(posts == 1 && gets == 2 && strcmp(trace, "GPG") == 0);
     valve_client_on_reconnect(); valve_client_test_run_pending();
     assert(posts == 1 && gets == 3 && strcmp(trace, "GPGG") == 0);
     fail_transport = 1;
+    expected_post_route = "http://192.0.2.10:8081/api/v1/display/actions/drain";
     assert(valve_client_post(&drain, &s) == VALVE_CLIENT_TIMEOUT);
     assert(s.state == VALVE_UNKNOWN);
     fail_transport = 0; valve_client_test_run_pending();
     assert(posts == 2 && gets == 4 && strcmp(trace, "GPGGPG") == 0);
     assert(valve_client_post(&(valve_request_t){.action = (valve_action_t)99}, &s) == VALVE_CLIENT_INVALID && posts == 2);
+    expected_post_route = NULL;
 }
 static bool queue_action(valve_action_t action, uint32_t *id) {
     valve_request_t request = {.action = action,
@@ -247,8 +264,10 @@ static bool queue_action(valve_action_t action, uint32_t *id) {
     return valve_client_request_post_for_config(&request, valve_config_generation(), id);
 }
 static valve_client_event_t last_event;
+static valve_client_event_t last_post_event;
 static void callback(const valve_client_event_t *event, void *context) {
     (void)context; callbacks++; last_event = *event;
+    if (event->kind == VALVE_CLIENT_EVENT_POST_STATUS) last_post_event = *event;
     if (event->kind == VALVE_CLIENT_EVENT_RECOVERY_GET) recovery_callbacks++;
 }
 static void scheduling_cases(void) {
@@ -280,6 +299,63 @@ static void scheduling_cases(void) {
     assert(valve_client_request_get());
     valve_client_test_run_pending();
     assert(callbacks == 0);
+}
+static void start_admission_cases(void) {
+    valve_client_test_clock(client_clock);
+    valve_client_test_transport(mock_transport, NULL);
+    valve_client_on_reconnect(); valve_client_test_run_pending();
+    client_now_ms = UINT64_C(5000000000);
+    posts = gets = callbacks = recovery_callbacks = 0; trace[0] = 0;
+    uint32_t id;
+    expected_post_route = "http://192.0.2.10:8081/api/v1/display/actions/timed-shower";
+    assert(queue_action(VALVE_ACTION_START, &id));
+    client_now_ms += 9999;
+    valve_client_test_run_pending();
+    assert(posts == 1 && callbacks == 1 && last_event.request_id == id &&
+           last_event.result == VALVE_CLIENT_OK);
+
+    posts = gets = callbacks = recovery_callbacks = 0; trace[0] = 0;
+    assert(queue_action(VALVE_ACTION_START, &id));
+    client_now_ms += 10000;
+    valve_client_test_run_pending();
+    assert(posts == 0 && callbacks >= 1 && last_post_event.request_id == id &&
+           last_post_event.result == VALVE_CLIENT_TIMEOUT);
+
+    posts = gets = callbacks = recovery_callbacks = 0; trace[0] = 0;
+    assert(queue_action(VALVE_ACTION_START, &id));
+    advance_on_preflight_ms = 10000;
+    valve_client_test_run_pending();
+    assert(posts == 0 && gets >= 1 && callbacks >= 1 &&
+           last_post_event.request_id == id && last_post_event.result == VALVE_CLIENT_TIMEOUT);
+
+    posts = gets = callbacks = recovery_callbacks = 0; trace[0] = 0;
+    client_now_ms += 100;
+    assert(queue_action(VALVE_ACTION_START, &id));
+    client_now_ms--;
+    valve_client_test_run_pending();
+    assert(posts == 0 && callbacks >= 1 && last_post_event.result == VALVE_CLIENT_TIMEOUT);
+
+    posts = gets = callbacks = recovery_callbacks = 0; trace[0] = 0;
+    assert(queue_action(VALVE_ACTION_DRAIN, &id));
+    expected_post_route = "http://192.0.2.10:8081/api/v1/display/actions/drain";
+    client_now_ms += 10000;
+    valve_client_test_run_pending();
+    assert(posts == 1 && callbacks == 1 && last_event.result == VALVE_CLIENT_OK);
+
+    posts = gets = callbacks = recovery_callbacks = 0; trace[0] = 0;
+    assert(queue_action(VALVE_ACTION_START, &id));
+    expected_post_route = "http://192.0.2.10:8081/api/v1/display/actions/timed-shower";
+    advance_on_post_ms = 10000;
+    valve_client_test_run_pending();
+    assert(posts == 1 && callbacks == 1 && last_event.result == VALVE_CLIENT_OK);
+
+    posts = gets = callbacks = recovery_callbacks = 0; trace[0] = 0;
+    assert(queue_action(VALVE_ACTION_START, &id));
+    valve_client_on_disconnect(); valve_client_on_reconnect();
+    valve_client_test_run_pending();
+    assert(posts == 0);
+    expected_post_route = NULL;
+    valve_client_test_clock(NULL);
 }
 static void completion_order_cases(void) {
     valve_observation_gate_t gate = {0};
@@ -465,4 +541,4 @@ static void test_short_setting_with_missing_capability_blocks_start(void) {
     assert(valve_client_post(&(valve_request_t){VALVE_ACTION_DRAIN, 0}, &status) == VALVE_CLIENT_OK);
     assert(duration_posts == 1);
 }
-int main(void) { capability_parse_cases(); temperature_parse_cases(); temperature_format_cases(); parse_cases(); request_cases(); scheduling_cases(); completion_order_cases(); recovery_session_cases(); dial_cases(); config_change_cases(); test_duration_cache_ordering(); test_start_captures_selected_duration(); test_legacy_server_uses_empty_600_request(); test_short_setting_with_missing_capability_blocks_start(); puts("valve parser/client tests passed"); }
+int main(void) { capability_parse_cases(); temperature_parse_cases(); temperature_format_cases(); parse_cases(); request_cases(); scheduling_cases(); start_admission_cases(); completion_order_cases(); recovery_session_cases(); dial_cases(); config_change_cases(); test_duration_cache_ordering(); test_start_captures_selected_duration(); test_legacy_server_uses_empty_600_request(); test_short_setting_with_missing_capability_blocks_start(); puts("valve parser/client tests passed"); }
