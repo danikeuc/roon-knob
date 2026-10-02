@@ -3,12 +3,13 @@
 **Status:** issue #9 / draft PR #10 remains a candidate. The first image was
 flashed and boot-observed on 2026-10-02, but admin access by IPv4 failed
 with HTTP 403; it is not accepted. The mapped-address fix from source `9b1ca05` was subsequently flashed and
-passed digest, NVS retention, bounded boot and read-only HTTP checks. User
-PIN/settings/rotation acceptance remains pending. See the [commissioning record](../valve-dial-commissioning.md#admin-candidate-usb-and-ipv4-observation--2026-10-02). This page covers
+passed digest, NVS retention, bounded boot and read-only HTTP checks. The operator subsequently confirmed PIN/login, duration save/reload and
+requested rotation/touch/swipe checks. Power-cycle persistence and quantitative
+performance/scheduling evidence remain pending. See the [commissioning record](../valve-dial-commissioning.md#admin-candidate-usb-and-ipv4-observation--2026-10-02). This page covers
 PIN/recovery, shower duration and rollback for the Waveshare ESP32-S3 Dial
 candidate built with ESP-IDF 5.5.5. The user explicitly confirmed
-0°, 90°, 180° and 270° for this candidate. Device performance and
-interaction acceptance at those angles remain pending. Historical v1.0.0
+0°, 90°, 180° and 270° for this candidate. The operator confirmed rotation and input behavior; quantitative performance
+measurements remain pending. Historical v1.0.0
 observations remain scoped to the older artifact in [the release record](../releases/v1.0.0.md).
 
 ## Phone setup on the trusted LAN
