@@ -17,6 +17,7 @@
 #include "wifi_manager.h"
 #include "valve_client_dial.h"
 #include "valve_ui_dial.h"
+#include "admin_settings_dial.h"
 
 #include "lvgl.h"
 
@@ -244,6 +245,7 @@ static void ui_loop_task(void *arg) {
         platform_input_process_events();
 
         // Process pending display actions (e.g., swipe gestures)
+        admin_settings_process_ui();
         platform_display_process_pending();
 
         valve_ui_process((uint32_t)(esp_timer_get_time() / 1000), !display_is_sleeping());
@@ -275,6 +277,7 @@ static void ui_loop_task(void *arg) {
         // mDNS and BLE consume/fragment the remaining internal heap.
         if (atomic_exchange_explicit(&s_config_server_stop_pending, false,
                                      memory_order_acq_rel)) {
+            admin_settings_cancel_ui();
             config_server_stop();
         }
         if (atomic_exchange_explicit(&s_config_server_start_pending, false,
@@ -312,14 +315,9 @@ void app_main(void) {
 
     // Initialize NVS for configuration storage
     esp_err_t err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        esp_err_t erase_err = nvs_flash_erase();
-        if (erase_err != ESP_OK) {
-            ESP_LOGW(TAG, "NVS erase failed, ignoring");
-        }
-        err = nvs_flash_init();
-    }
+    // Fail closed: automatic NVS erasure would remove administrator credentials.
     ESP_ERROR_CHECK(err);
+    admin_settings_init();
 
     // Initialize display hardware (SPI, LCD panel) BEFORE lv_init
     ESP_LOGI(TAG, "Initializing display hardware...");
@@ -392,6 +390,10 @@ void app_main(void) {
     // Initialize display sleep management now that UI task is created
     ESP_LOGI(TAG, "Initializing display sleep management");
     platform_display_init_sleep(g_ui_task_handle);
+
+    /* app_main is a background task; storage never runs in ui_loop. */
+    if (admin_settings_restore() != ADMIN_OK)
+        ESP_LOGE(TAG, "Admin settings restore unavailable; START remains gated");
 
     // Start application logic
     ESP_LOGI(TAG, "Starting app...");

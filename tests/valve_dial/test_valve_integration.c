@@ -1,4 +1,7 @@
 #include "valve_ui_dial.h"
+#include "admin_settings_dial.h"
+#include "admin_store_dial.h"
+#include "admin_server_dial.h"
 #include "valve_client_dial.h"
 #include "valve_config_dial.h"
 #include "bridge_command_plan.h"
@@ -17,6 +20,22 @@
 #include <string.h>
 #include <stdio.h>
 
+static admin_settings_t saved_settings={600,0,false,0};
+static uint16_t applied_rotation;
+static bool rotation_override;
+void admin_server_bind_settings(const admin_settings_binding_t *b) {(void)b;}
+esp_err_t admin_store_load(admin_settings_t *out) {*out=saved_settings;return ESP_OK;}
+esp_err_t admin_store_save(const admin_settings_t *value,uint32_t generation) {
+    if(generation!=saved_settings.generation)return ADMIN_ERR_CONFLICT;
+    saved_settings=*value;saved_settings.generation++;return ESP_OK;
+}
+void admin_settings_wait_tick(void) {admin_settings_process_ui();}
+bool platform_display_try_rotation(uint16_t degrees) {applied_rotation=degrees;return true;}
+uint16_t platform_display_rotation_get(void) {return applied_rotation;}
+bool platform_display_rotation_override_get(void) {return rotation_override;}
+void platform_display_rotation_override_set(bool enabled) {rotation_override=enabled;}
+void platform_display_cancel_input(void) {valve_ui_cancel_touch();}
+
 static uint32_t fake_now = 1000;
 static int posts, gets, valve_indicator;
 static lv_obj_t objects[80];
@@ -25,6 +44,7 @@ static lv_obj_t screen;
 struct fake_queue { unsigned capacity, count, head; size_t item_size; unsigned char data[4][256]; };
 static struct fake_queue queue;
 int64_t esp_timer_get_time(void) { return (int64_t)fake_now * 1000; }
+static uint64_t client_clock(void) { return fake_now; }
 QueueHandle_t xQueueCreate(unsigned capacity, size_t item_size) {
     assert(capacity == 4 && item_size <= 256);
     queue = (struct fake_queue){.capacity = capacity, .item_size = item_size};
@@ -71,7 +91,7 @@ void ui_set_valve_active(bool active) { valve_indicator = active; }
 
 static const char *const secret = "integration-private-token";
 static unsigned start_posts, drain_posts, bridge_posts;
-static bool pi_online = true, bridge_playing;
+static bool pi_online = true, bridge_playing, duration_capability;
 static uint32_t pi_deadline_ms;
 static char request_trace[128];
 static uint32_t config_generation;
@@ -83,18 +103,24 @@ bool valve_config_load(char *url, size_t ul, char *token, size_t tl) {
     return true;
 }
 static int fake_pi_transport(const char *method, const char *url, const char *token,
-                             int *status, char *response, size_t cap, size_t *len, void *ctx) {
+                             const char *request_body, size_t request_len, int *status, char *response, size_t cap, size_t *len, void *ctx) {
     (void)ctx;
     assert(strcmp(token, secret) == 0);
     assert(strstr(url, secret) == NULL && strchr(url, '?') == NULL);
     assert(strncmp(url, "http://fake-pi:8081/api/v1/display/", strlen("http://fake-pi:8081/api/v1/display/")) == 0);
     if (!pi_online) return -3;
+    assert(request_len == 0 || (request_body && request_len == strlen(request_body)));
     const char *route = strrchr(url, '/');
     assert(route);
     if (strcmp(method, "POST") == 0) {
         posts++;
         if (strcmp(route, "/timed-shower") == 0) {
-            start_posts++; pi_deadline_ms = fake_now + 600000;
+            unsigned seconds = 600;
+            if (duration_capability) {
+                assert(request_body && strcmp(request_body, "{\"duration_seconds\":300}") == 0);
+                seconds = 300;
+            } else assert(!request_body && request_len == 0);
+            start_posts++; pi_deadline_ms = fake_now + seconds * 1000u;
             strcat(request_trace, "S");
         } else {
             assert(strcmp(route, "/drain") == 0);
@@ -109,8 +135,9 @@ static int fake_pi_transport(const char *method, const char *url, const char *to
         unsigned remaining = pi_deadline_ms > fake_now ? (pi_deadline_ms - fake_now) / 1000 : 0;
         bool supply = pi_deadline_ms > fake_now;
         int n = snprintf(response, cap,
-            "{\"mode\":\"manual_timed\",\"state\":\"%s\",\"command\":\"%s\",\"reason\":\"mock\",\"remaining_seconds\":%u}",
-            supply ? "TIMED_SHOWER" : "MANUAL_DRAIN", supply ? "SUPPLY" : "DRAIN", remaining);
+            "{\"mode\":\"manual_timed\",\"state\":\"%s\",\"command\":\"%s\",\"reason\":\"mock\",\"remaining_seconds\":%u,\"timed_shower_duration_supported\":%s}",
+            supply ? "TIMED_SHOWER" : "MANUAL_DRAIN", supply ? "SUPPLY" : "DRAIN", remaining,
+            duration_capability ? "true" : "false");
         assert(n > 0 && (size_t)n < cap);
         *status = 200; *len = (size_t)n;
     }
@@ -166,7 +193,9 @@ static void flush(void) {
     valve_ui_process(fake_now, true);
 }
 int main(void) {
+    valve_client_test_clock(client_clock);
     valve_client_test_transport(fake_pi_transport, NULL);
+    assert(valve_client_selected_duration_publish(600));
     valve_ui_init();
     valve_client_on_reconnect();
     valve_ui_connected(true);
@@ -174,6 +203,15 @@ int main(void) {
     flush();
     assert(strcmp(objects[2].text, "OFF") == 0);
     assert(posts == 0 && gets >= 1);
+    /* Restart/settings restoration cannot manufacture a START. */
+    admin_settings_init();assert(admin_settings_restore()==ADMIN_OK);flush();
+    assert(start_posts==0);
+    /* A rotation interrupts a real partially confirmed valve hold. */
+    valve_ui_touch(100,260,true,false,fake_now);
+    fake_now+=1500;
+    assert(admin_settings_set_rotation(90,0)==ADMIN_OK);
+    valve_ui_touch(100,260,false,false,fake_now);flush();
+    assert(start_posts==0 && applied_rotation==90);
     valve_gesture_context_t media = {0};
     assert(valve_gesture_classify(80, 4, 250, 0, media) == VALVE_GESTURE_SWITCH_SCREEN);
     assert(valve_gesture_classify(4, -80, 250, 0, media) == VALVE_GESTURE_ART_UP);
@@ -196,6 +234,11 @@ int main(void) {
     assert(strcmp(request_trace + strlen(request_trace) - 2, "SG") == 0);
     assert(strcmp(objects[2].text, "ON") == 0);
     assert(strcmp(objects[5].text, "10:00") == 0);
+    uint32_t accepted_deadline = pi_deadline_ms;
+    valve_client_on_disconnect(); valve_ui_connected(false);
+    assert(pi_deadline_ms == accepted_deadline && start_posts == 1 && drain_posts == 0);
+    valve_client_on_reconnect(); valve_ui_connected(true); flush();
+    assert(pi_deadline_ms == accepted_deadline && start_posts == 1 && drain_posts == 0);
     fake_now += 30000; valve_ui_wake(); flush();
     assert(strcmp(objects[5].text, "9:30") == 0);
     assert(bridge_posts == 0 && !bridge_playing);
@@ -243,6 +286,27 @@ int main(void) {
     assert(controller_input_dispatch_control(CONTROLLER_CONTROL_INTENT_NEXT));
     assert(bridge_posts == 2);
     assert(strcmp(objects[2].text, "OFF") == 0);
-    puts("mock Pi + bridge integration session passed (Roon input/router/client, page switch, hold, 600s, DRAIN, reconnect, no replay, token redaction)");
+    /* Selected five minutes is captured in the queued physical intent. A later
+     * settings publication only changes the next idle start, not Pi's deadline. */
+    duration_capability = true;
+    assert(valve_client_selected_duration_publish(300));
+    valve_ui_show(true); flush();
+    assert(strcmp(objects[5].text, "HOLD 2s\n5 MIN") == 0);
+    valve_ui_touch(100, 260, true, false, fake_now);
+    fake_now += 2000; valve_ui_touch(100, 260, true, false, fake_now);
+    assert(start_posts == 1);
+    assert(valve_client_selected_duration_publish(600)); /* queued intent keeps 300 */
+    flush();
+    assert(start_posts == 2 && strcmp(objects[5].text, "5:00") == 0);
+    assert(valve_client_selected_duration_publish(300));
+    uint32_t active_deadline=pi_deadline_ms;
+    assert(admin_settings_set_duration(600,1)==ADMIN_OK);
+    assert(pi_deadline_ms==active_deadline);
+    flush();
+    assert(start_posts == 2 && strcmp(objects[5].text, "5:00") == 0);
+    fake_now += 30000; valve_ui_wake(); flush();
+    assert(strcmp(objects[5].text, "4:30") == 0);
+    assert(start_posts == 2);
+    puts("mock Pi + bridge integration session passed (Roon input/router/client, page switch, hold, 600s/300s, DRAIN, reconnect, no replay, token redaction)");
     return 0;
 }

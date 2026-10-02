@@ -4,13 +4,15 @@
 #include <stddef.h>
 #include <stdint.h>
 typedef enum { VALVE_UNKNOWN, VALVE_DRAIN, VALVE_SUPPLY } valve_state_t;
-typedef enum { VALVE_ACTION_START_600S, VALVE_ACTION_DRAIN } valve_action_t;
+typedef enum { VALVE_ACTION_START, VALVE_ACTION_DRAIN } valve_action_t;
+typedef struct { valve_action_t action; uint16_t duration_seconds; } valve_request_t;
 typedef struct {
     valve_state_t state;
     uint16_t remaining_seconds;
     char reason[96];
     float pipe_temperature_c;
     bool temperature_available;
+    bool timed_shower_duration_supported;
 } valve_status_t;
 bool valve_status_parse(const char *json, size_t len, valve_status_t *out);
 void valve_temperature_format(const valve_status_t *status, char *buffer, size_t buffer_size);
@@ -25,7 +27,6 @@ bool valve_supply_allowed(valve_state_t state, bool configured, bool connected, 
 bool valve_drain_allowed(bool configured, bool connected);
 bool valve_drain_tap_allowed(bool started_on_drain, bool moved,
                              valve_gesture_t gesture, bool configured, bool connected);
-int valve_touch_coordinate(int raw, int rotation);
 typedef struct {
     uint32_t session;
     uint32_t minimum_request_id;

@@ -11,7 +11,7 @@ jobs:
   update-changelog:
     name: Update CHANGELOG.md
     # The shower bundle maintains its own release notes on the custom branch.
-    if: github.event.release.tag_name != 'v1.0.0'
+    if: github.event.release.tag_name != 'v1.0.0' && github.event.release.tag_name != 'v1.1.0'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

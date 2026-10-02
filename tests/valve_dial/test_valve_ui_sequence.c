@@ -8,18 +8,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <pthread.h>
+#include <sched.h>
+#include <stdatomic.h>
 
-static uint32_t fake_now = 1000, next_id, session = 1;
+static atomic_uint fake_now = ATOMIC_VAR_INIT(1000);
+static uint32_t next_id, session = 1;
 static valve_client_callback_fn client_callback;
 static void *client_context;
 static int posts, gets, valve_indicator;
 static valve_action_t last_action;
+static uint16_t last_duration, selected_duration = 600;
+static bool selected_ready;
 static lv_obj_t objects[80];
 static unsigned object_count;
 static lv_obj_t screen;
 struct fake_queue { unsigned capacity, count, head; size_t item_size; unsigned char data[4][256]; };
 static struct fake_queue queue;
-int64_t esp_timer_get_time(void) { return (int64_t)fake_now * 1000; }
+int64_t esp_timer_get_time(void) { return (int64_t)atomic_load(&fake_now) * 1000; }
 QueueHandle_t xQueueCreate(unsigned capacity, size_t item_size) {
     assert(capacity == 4 && item_size <= 256);
     queue = (struct fake_queue){.capacity = capacity, .item_size = item_size};
@@ -77,13 +83,15 @@ bool valve_client_start(valve_client_callback_fn callback, void *context) {
     client_callback = callback; client_context = context; return true;
 }
 bool valve_client_request_get_tagged(uint32_t *id) { gets++; next_id++; if (id) *id = next_id; return true; }
-bool valve_client_request_post_tagged(valve_action_t action, uint32_t *id) {
-    assert(action == VALVE_ACTION_START_600S || action == VALVE_ACTION_DRAIN);
-    last_action = action;
+bool valve_client_request_post_for_config(const valve_request_t *request, uint32_t generation, uint32_t *id) {
+    if (!request || generation != config_generation) return false;
+    assert(request->action == VALVE_ACTION_START || request->action == VALVE_ACTION_DRAIN);
+    last_action = request->action; last_duration = request->duration_seconds;
     posts++; next_id++; if (id) *id = next_id; return true;
 }
-bool valve_client_request_post_for_config(valve_action_t action, uint32_t generation, uint32_t *id) {
-    return generation == config_generation && valve_client_request_post_tagged(action, id);
+bool valve_client_selected_duration_get(uint16_t *seconds) {
+    if (!selected_ready || !seconds) return false;
+    *seconds = selected_duration; return true;
 }
 uint32_t valve_client_current_session(void) { return session; }
 static lv_obj_t *find_label(const char *text) {
@@ -125,6 +133,68 @@ static void emit(uint32_t id, uint32_t origin_session, valve_client_event_kind_t
     emit_temperature(id, origin_session, kind, result, state, false, 0);
 }
 static void process(void) { valve_ui_process(fake_now, true); }
+extern void valve_ui_test_capability_lock(void);
+extern void valve_ui_test_capability_unlock(void);
+static atomic_bool snapshot_reader_done = ATOMIC_VAR_INIT(false);
+static atomic_uint snapshot_reader_count = ATOMIC_VAR_INIT(0);
+static void *snapshot_reader(void *unused) {
+    (void)unused;
+    while (!atomic_load(&snapshot_reader_done)) {
+        valve_duration_capability_snapshot_t copy;
+        if (!valve_ui_duration_capability_snapshot_get(&copy)) continue;
+        if (copy.valid) {
+            assert(copy.session == session && copy.config_generation == config_generation);
+            assert(copy.supported == (bool)(copy.received_at_ms & 1u));
+            atomic_fetch_add(&snapshot_reader_count, 1);
+        }
+        bool supported;
+        (void)valve_ui_duration_capability_get(&supported);
+    }
+    return NULL;
+}
+static void test_cross_task_capability_snapshot(void) {
+    valve_status_t current = {.state = VALVE_DRAIN};
+    pthread_t reader;
+    atomic_store(&snapshot_reader_done, false);
+    assert(pthread_create(&reader, NULL, snapshot_reader, NULL) == 0);
+    for (unsigned i = 0; i < 5000; ++i) {
+        atomic_store(&fake_now, 100000u + i);
+        current.timed_shower_duration_supported = (bool)(i & 1u);
+        valve_ui_set_status(&current);
+        if (i % 64u == 0) sched_yield();
+    }
+    atomic_store(&snapshot_reader_done, true);
+    assert(pthread_join(reader, NULL) == 0);
+    assert(atomic_load(&snapshot_reader_count) > 0);
+    valve_duration_capability_snapshot_t copy;
+    assert(valve_ui_duration_capability_snapshot_get(&copy));
+    assert(copy.valid && copy.supported == (bool)(copy.received_at_ms & 1u));
+    valve_duration_capability_snapshot_t sentinel = {
+        .valid = true, .supported = true, .received_at_ms = 123,
+        .session = 456, .config_generation = 789,
+    };
+    valve_ui_test_capability_lock();
+    assert(!valve_ui_duration_capability_snapshot_get(&sentinel));
+    assert(sentinel.valid && sentinel.supported && sentinel.received_at_ms == 123 &&
+           sentinel.session == 456 && sentinel.config_generation == 789);
+    bool supported = false;
+    assert(!valve_ui_duration_capability_get(&supported));
+    valve_ui_test_capability_unlock();
+    assert(valve_ui_duration_capability_get(&supported) && supported == copy.supported);
+    session++;
+    assert(!valve_ui_duration_capability_get(&supported));
+    session--;
+    config_generation += 2;
+    assert(!valve_ui_duration_capability_get(&supported));
+    config_generation -= 2;
+    valve_ui_connected(false);
+    assert(!valve_ui_duration_capability_get(&supported));
+    valve_ui_connected(true);
+    valve_ui_set_unknown("test invalidation");
+    assert(valve_ui_duration_capability_snapshot_get(&copy) && !copy.valid);
+    supported = true;
+    assert(!valve_ui_duration_capability_get(&supported) && supported);
+}
 int main(void) {
     valve_ui_init();
     valve_ui_connected(true);
@@ -144,6 +214,13 @@ int main(void) {
     valve_ui_process(fake_now - 1, true);
     assert(strcmp(objects[2].text, "OFF") == 0);
     assert(strcmp(temperature->text, "6,4 °C") == 0);
+    assert(strcmp(objects[5].text, "LOADING") == 0);
+    valve_ui_touch(100, 260, true, false, 1100);
+    valve_ui_touch(100, 260, true, false, 3100);
+    assert(posts == 0);
+    valve_ui_cancel_touch();
+    selected_ready = true;
+    process();
     assert(strcmp(objects[5].text, "HOLD 2s\n10 MIN") == 0);
     assert(objects[11].flags & LV_OBJ_FLAG_HIDDEN);   /* no water while DRAIN */
     assert(!(objects[48].flags & LV_OBJ_FLAG_HIDDEN)); /* snowflake visible */
@@ -152,7 +229,7 @@ int main(void) {
     uint32_t old_get = next_id;
     valve_ui_touch(100, 260, true, false, 1100);
     valve_ui_touch(100, 260, true, false, 3100);
-    assert(posts == 1);
+    assert(posts == 1 && last_action == VALVE_ACTION_START && last_duration == 600);
     assert(strcmp(temperature->text, "---") == 0); /* pending action clears old reading */
     uint32_t action = next_id;
     emit(old_get, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
@@ -308,5 +385,52 @@ int main(void) {
     valve_ui_show(true);
     assert(!(objects[0].flags & LV_OBJ_FLAG_HIDDEN));
     assert(strcmp(temperature->text, "6,4 °C") == 0);
+    /* Saved short duration without a fresh capability cannot authorize START. */
+    valve_ui_cancel_touch();
+    selected_duration = 180;
+    healthy.timed_shower_duration_supported = false;
+    valve_ui_set_status(&healthy);
+    assert(strcmp(objects[5].text, "BLOCKED\n3 MIN") == 0);
+    assert(strcmp(objects[3].text, "Pi: 10 min only") == 0);
+    assert(objects[4].state & LV_STATE_DISABLED);
+    assert(selected_duration == 180);
+    bool supported = true;
+    assert(valve_ui_duration_capability_get(&supported) && !supported);
+    int before_short = posts;
+    valve_ui_touch(100, 260, true, false, fake_now);
+    valve_ui_touch(100, 260, true, false, fake_now + 2000);
+    assert(posts == before_short);
+    valve_ui_cancel_touch();
+    healthy.timed_shower_duration_supported = true;
+    valve_ui_set_status(&healthy);
+    assert(valve_ui_duration_capability_get(&supported) && supported);
+    assert(strcmp(objects[5].text, "HOLD 2s\n3 MIN") == 0);
+    assert(strcmp(objects[3].text, "") == 0);
+    assert(!(objects[4].state & LV_STATE_DISABLED));
+    assert(posts == before_short && selected_duration == 180);
+    valve_duration_capability_snapshot_t snapshot;
+    assert(valve_ui_duration_capability_snapshot_get(&snapshot));
+    assert(snapshot.valid && snapshot.supported && snapshot.session == session &&
+           snapshot.config_generation == config_generation && snapshot.received_at_ms == fake_now);
+    valve_ui_touch(100, 260, true, false, fake_now);
+    valve_ui_touch(100, 260, true, false, fake_now + 2000);
+    assert(posts == before_short + 1 && last_duration == 180);
+    assert(valve_ui_duration_capability_snapshot_get(&snapshot) && !snapshot.valid);
+    valve_ui_cancel_touch();
+    healthy.timed_shower_duration_supported = true;
+    valve_ui_set_status(&healthy);
+    fake_now += 11000;
+    process();
+    assert(!valve_ui_duration_capability_get(&supported));
+    assert(strcmp(objects[3].text, "Checking Pi...") == 0 ||
+           strcmp(objects[3].text, "Status unavailable") == 0);
+    assert(selected_duration == 180);
+    int before_stale = posts;
+    valve_ui_touch(100, 260, true, false, fake_now);
+    valve_ui_touch(100, 260, true, false, fake_now + 2000);
+    assert(posts == before_stale); /* stale capability is not authorization */
+    valve_ui_touch(100, 260, false, false, fake_now + 2001);
+    assert(posts == before_stale + 1 && last_action == VALVE_ACTION_DRAIN);
+    test_cross_task_capability_snapshot();
     puts("valve UI sequence tests passed");
 }

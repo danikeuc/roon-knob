@@ -1,7 +1,10 @@
+#include "admin_settings_dial.h"
 // HTTP config server - runs when connected to WiFi for remote configuration
 // Access at http://<knob-ip>/ to set bridge URL
 
 #include "config_server.h"
+#include "admin_server_dial.h"
+#include <stdio.h>
 #include "valve_config_dial.h"
 #include "controller_config.h"
 #include "http_server_lifecycle.h"
@@ -78,7 +81,7 @@ static const char *HTML_CONFIG =
     ".section{max-width:400px;}"
     "a{color:#4fc3f7;}"
     ".device{background:#0f0f1a;padding:10px;border-radius:5px;margin:8px 0;display:flex;justify-content:space-between;align-items:center;}"
-    "</style></head><body>"
+    "</style><script src='/admin/forms.js' defer></script></head><body>"
     "<h1>HiPhi Dial</h1>"
     "<p class='info'>Configure your HiPhi Dial settings</p>"
     "<p><a href='/ble'>BLE Media Remote settings</a></p>"
@@ -120,7 +123,7 @@ static const char *HTML_SUCCESS =
     "h1{color:#4fc3f7;}"
     ".success{background:#2e7d32;padding:20px;border-radius:10px;max-width:300px;margin:20px auto;}"
     ".info{background:#16213e;padding:15px;border-radius:10px;max-width:300px;margin:20px auto;}"
-    "</style></head><body>"
+    "</style><script src='/admin/forms.js' defer></script></head><body>"
     "<h1>HiPhi Dial</h1>"
     "<div class='success'>%s</div>"
     "<div class='info'>Device will reboot automatically to apply changes...</div>"
@@ -260,6 +263,7 @@ static void resolve_local_in_url(char *url, size_t url_len) {
 
 // Handler for GET / - serve the config form
 static esp_err_t config_get_handler(httpd_req_t *req) {
+    if (!admin_http_authorize(req, false)) return ESP_OK;
     ESP_LOGI(TAG, "Serving config page");
 
     controller_config_snapshot_t snapshot = {0};
@@ -320,16 +324,19 @@ static esp_err_t config_get_handler(httpd_req_t *req) {
                  "<div class='wifi-entry'><em>No saved networks</em></div>");
     }
 
+    char escaped_current[768], escaped_bridge[768];
+    html_escape(current, escaped_current, sizeof(escaped_current));
+    html_escape(cfg->bridge_base, escaped_bridge, sizeof(escaped_bridge));
     // Build HTML with current values, saved networks, and bridge status.
-    char *html = heap_caps_malloc(4096,
+    char *html = heap_caps_malloc(6144,
                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!html) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
         return ESP_FAIL;
     }
 
-    snprintf(html, 4096, HTML_CONFIG, current, status_class, status_text,
-             wifi_html, cfg->bridge_base);
+    snprintf(html, 6144, HTML_CONFIG, escaped_current, status_class, status_text,
+             wifi_html, escaped_bridge);
 
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, html, strlen(html));
@@ -339,6 +346,7 @@ static esp_err_t config_get_handler(httpd_req_t *req) {
 
 // Handler for POST /config - save settings
 static esp_err_t config_post_handler(httpd_req_t *req) {
+    if (!admin_http_authorize(req, true)) return ESP_OK;
     char buf[256] = {0};
     int received = httpd_req_recv(req, buf, sizeof(buf) - 1);
 
@@ -416,7 +424,7 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
 
 static const char *HTML_VALVES_CONFIG =
     "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
-    "<title>Valve controller settings</title></head><body>"
+    "<title>Valve controller settings</title><script src='/admin/forms.js' defer></script></head><body>"
     "<h1>Valve controller settings</h1>"
     "<p>Enter the Pi LAN base URL and display token. The saved token is never shown here.</p>"
     "<form method='POST' action='/valves-config'>"
@@ -427,6 +435,7 @@ static const char *HTML_VALVES_CONFIG =
     "</form><p><a href='/'>Back to settings</a></p></body></html>";
 
 static esp_err_t valves_config_get_handler(httpd_req_t *req) {
+    if (!admin_http_authorize(req, false)) return ESP_OK;
     httpd_resp_set_type(req, "text/html");
     return httpd_resp_sendstr(req, HTML_VALVES_CONFIG);
 }
@@ -486,6 +495,7 @@ static bool parse_valves_form(char *body, char *url, char *token, char *action) 
 }
 
 static esp_err_t valves_config_post_handler(httpd_req_t *req) {
+    if (!admin_http_authorize(req, true)) return ESP_OK;
     char body[1025] = {0};
     char url[VALVE_CONFIG_URL_LEN] = {0};
     char token[VALVE_CONFIG_TOKEN_LEN] = {0};
@@ -527,6 +537,7 @@ done:
 }
 
 static esp_err_t wifi_add_handler(httpd_req_t *req) {
+    if (!admin_http_authorize(req, true)) return ESP_OK;
     char buf[384] = {0};
     int received = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (received <= 0) {
@@ -583,6 +594,7 @@ static esp_err_t wifi_add_handler(httpd_req_t *req) {
 }
 
 static esp_err_t wifi_remove_handler(httpd_req_t *req) {
+    if (!admin_http_authorize(req, true)) return ESP_OK;
     char buf[64] = {0};
     int received = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (received <= 0) {
@@ -658,6 +670,7 @@ static bool ble_state_auto_updates(rk_ble_hid_host_state_t state) {
 }
 
 static esp_err_t ble_get_handler(httpd_req_t *req) {
+    if (!admin_http_authorize(req, false)) return ESP_OK;
     rk_ble_hid_host_status_t status = {0};
     if (rk_ble_hid_host_status_copy(&status) != RK_BLE_HID_HOST_OK) {
         httpd_resp_set_status(req, "503 Service Unavailable");
@@ -746,7 +759,7 @@ static esp_err_t ble_get_handler(httpd_req_t *req) {
         ".empty,.hint{color:#b9c3d8}.technical{margin-top:28px;color:#91a0bb;font-size:13px}"
         ".technical summary{cursor:pointer;color:#b9c3d8}@keyframes pulse{50%%{opacity:.35;transform:scale(.75)}}"
         "@media(prefers-reduced-motion:reduce){.working .dot{animation:none}}"
-        "</style>%s</head><body><main>"
+        "</style>%s<script src='/admin/forms.js' defer></script></head><body><main>"
         "<a href='/'>← Back to Dial settings</a>"
         "<h1>BLE Media Remote</h1>"
         "<p class='lede'>Connect one physical Bluetooth remote to control media on this Dial.</p>"
@@ -850,6 +863,7 @@ static esp_err_t ble_get_handler(httpd_req_t *req) {
 }
 
 static esp_err_t ble_enable_handler(httpd_req_t *req) {
+    if (!admin_http_authorize(req, true)) return ESP_OK;
     char buf[32] = {0};
     int received = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (received <= 0) {
@@ -873,6 +887,7 @@ static esp_err_t ble_enable_handler(httpd_req_t *req) {
 }
 
 static esp_err_t ble_scan_handler(httpd_req_t *req) {
+    if (!admin_http_authorize(req, true)) return ESP_OK;
     rk_ble_hid_host_result_t result = rk_ble_hid_host_scan_start();
     if (result != RK_BLE_HID_HOST_OK) {
         return send_conflict(req, rk_ble_hid_host_result_name(result));
@@ -881,6 +896,7 @@ static esp_err_t ble_scan_handler(httpd_req_t *req) {
 }
 
 static esp_err_t ble_pair_handler(httpd_req_t *req) {
+    if (!admin_http_authorize(req, true)) return ESP_OK;
     char buf[96] = {0};
     int received = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (received <= 0) {
@@ -929,6 +945,7 @@ static esp_err_t ble_pair_handler(httpd_req_t *req) {
 }
 
 static esp_err_t ble_forget_handler(httpd_req_t *req) {
+    if (!admin_http_authorize(req, true)) return ESP_OK;
     rk_ble_hid_host_result_t result = rk_ble_hid_host_forget();
     if (result != RK_BLE_HID_HOST_OK) {
         return send_conflict(req, rk_ble_hid_host_result_name(result));
@@ -958,7 +975,7 @@ void config_server_start(void) {
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
-    config.max_uri_handlers = 12;
+    config.max_uri_handlers = 28;
     config.stack_size = 8192;  // Increased for mDNS resolution during config save
     // Note: max_req_hdr_len set via CONFIG_HTTPD_MAX_REQ_HDR_LEN in sdkconfig
 
@@ -971,85 +988,95 @@ void config_server_start(void) {
         return;
     }
 
+    if (admin_server_register(s_server) != ESP_OK) goto registration_failed;
+
     // Register URI handlers
     httpd_uri_t root = {
         .uri = "/",
         .method = HTTP_GET,
         .handler = config_get_handler,
     };
-    httpd_register_uri_handler(s_server, &root);
+    if (httpd_register_uri_handler(s_server, &root) != ESP_OK) goto registration_failed;
 
     httpd_uri_t config_post = {
         .uri = "/config",
         .method = HTTP_POST,
         .handler = config_post_handler,
     };
-    httpd_register_uri_handler(s_server, &config_post);
+    if (httpd_register_uri_handler(s_server, &config_post) != ESP_OK) goto registration_failed;
 
     httpd_uri_t valves_config_get = {
         .uri = "/valves-config",
         .method = HTTP_GET,
         .handler = valves_config_get_handler,
     };
-    httpd_register_uri_handler(s_server, &valves_config_get);
+    if (httpd_register_uri_handler(s_server, &valves_config_get) != ESP_OK) goto registration_failed;
 
     httpd_uri_t valves_config_post = {
         .uri = "/valves-config",
         .method = HTTP_POST,
         .handler = valves_config_post_handler,
     };
-    httpd_register_uri_handler(s_server, &valves_config_post);
+    if (httpd_register_uri_handler(s_server, &valves_config_post) != ESP_OK) goto registration_failed;
 
     httpd_uri_t wifi_add = {
         .uri = "/wifi-add",
         .method = HTTP_POST,
         .handler = wifi_add_handler,
     };
-    httpd_register_uri_handler(s_server, &wifi_add);
+    if (httpd_register_uri_handler(s_server, &wifi_add) != ESP_OK) goto registration_failed;
 
     httpd_uri_t wifi_remove = {
         .uri = "/wifi-remove",
         .method = HTTP_POST,
         .handler = wifi_remove_handler,
     };
-    httpd_register_uri_handler(s_server, &wifi_remove);
+    if (httpd_register_uri_handler(s_server, &wifi_remove) != ESP_OK) goto registration_failed;
 
     httpd_uri_t ble_get = {
         .uri = "/ble",
         .method = HTTP_GET,
         .handler = ble_get_handler,
     };
-    httpd_register_uri_handler(s_server, &ble_get);
+    if (httpd_register_uri_handler(s_server, &ble_get) != ESP_OK) goto registration_failed;
 
     httpd_uri_t ble_enable = {
         .uri = "/ble-enable",
         .method = HTTP_POST,
         .handler = ble_enable_handler,
     };
-    httpd_register_uri_handler(s_server, &ble_enable);
+    if (httpd_register_uri_handler(s_server, &ble_enable) != ESP_OK) goto registration_failed;
 
     httpd_uri_t ble_scan = {
         .uri = "/ble-scan",
         .method = HTTP_POST,
         .handler = ble_scan_handler,
     };
-    httpd_register_uri_handler(s_server, &ble_scan);
+    if (httpd_register_uri_handler(s_server, &ble_scan) != ESP_OK) goto registration_failed;
 
     httpd_uri_t ble_pair = {
         .uri = "/ble-pair",
         .method = HTTP_POST,
         .handler = ble_pair_handler,
     };
-    httpd_register_uri_handler(s_server, &ble_pair);
+    if (httpd_register_uri_handler(s_server, &ble_pair) != ESP_OK) goto registration_failed;
 
     httpd_uri_t ble_forget = {
         .uri = "/ble-forget",
         .method = HTTP_POST,
         .handler = ble_forget_handler,
     };
-    httpd_register_uri_handler(s_server, &ble_forget);
+    if (httpd_register_uri_handler(s_server, &ble_forget) != ESP_OK) goto registration_failed;
 
     ESP_LOGI(TAG, "Config server started");
+    http_server_lifecycle_unlock();
+    return;
+
+registration_failed:
+    admin_settings_cancel_pending();
+    httpd_stop(s_server);
+    s_server = NULL;
+    http_server_lifecycle_release_locked(HTTP_SERVER_OWNER_CONFIG);
     http_server_lifecycle_unlock();
 }
 
@@ -1060,6 +1087,7 @@ void config_server_stop_locked(void) {
     }
 
     ESP_LOGI(TAG, "Stopping config server");
+    admin_settings_cancel_pending();
     httpd_stop(s_server);
     s_server = NULL;
     http_server_lifecycle_release_locked(HTTP_SERVER_OWNER_CONFIG);

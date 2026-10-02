@@ -3,8 +3,8 @@ name: Build and Release
 on:
   push:
     branches: [master, main]
-    # v1.0.0 is the manually published, hardware-tested shower bundle.
-    tags: ['v*', '!v1.0.0']
+    # These system releases preserve manually published, hardware-tested shower bundles.
+    tags: ['v*', '!v1.0.0', '!v1.1.0']
   pull_request:
     branches: ['**']
 
@@ -286,6 +286,28 @@ jobs:
             components/rk_ble_hid_host/rk_ble_hid_host_stub.c \
             -o /tmp/test-rk-ble-hid-stub
           /tmp/test-rk-ble-hid-stub
+
+  test-dial-admin:
+    name: test-dial-admin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Test Dial admin and valve contracts with ESP-IDF 5.5.5
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.5
+          target: esp32s3
+          path: idf_app
+          command: >-
+            set -eu;
+            test "$(idf.py --version)" = "ESP-IDF v5.5.5";
+            cd ..;
+            test -f "$IDF_PATH/components/mbedtls/mbedtls/library/pkcs5.c";
+            sh scripts/test_admin_dial.sh;
+            sh scripts/test_valve_dial.sh
 
   build-idf:
     name: build-idf
@@ -615,7 +637,7 @@ jobs:
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [test-shared, build-idf, build-frame, build-rlcd, build-ble-off]
+    needs: [test-shared, test-dial-admin, build-idf, build-frame, build-rlcd, build-ble-off]
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
@@ -786,7 +808,7 @@ jobs:
   deploy-pr-preview:
     name: Deploy All PR Firmware Previews
     runs-on: ubuntu-latest
-    needs: [test-shared, build-idf, build-frame, build-rlcd, build-ble-off]
+    needs: [test-shared, test-dial-admin, build-idf, build-frame, build-rlcd, build-ble-off]
     if: github.event_name == 'pull_request'
     permissions:
       contents: write

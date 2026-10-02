@@ -31,13 +31,13 @@ cc -std=c11 -Wall -Wextra -Werror -DVALVE_CLIENT_HOST_TEST -Iidf_app/main \
     tests/valve_dial/test_valve_logic.c idf_app/main/valve_logic.c \
     idf_app/main/valve_client_dial.c -o "$tmp_dir/test_valve_logic"
 "$tmp_dir/test_valve_logic"
-cc -std=c11 -Wall -Wextra -Werror -Itests/valve_dial/fakes -Iidf_app/main -Icommon \
+cc -std=c11 -Wall -Wextra -Werror -pthread -DVALVE_UI_HOST_TEST -Itests/valve_dial/fakes -Iidf_app/main -Icommon \
     tests/valve_dial/test_valve_ui_sequence.c idf_app/main/valve_ui_dial.c \
     idf_app/main/valve_logic.c -o "$tmp_dir/test_valve_ui_sequence"
-cc -std=c11 -Wall -Wextra -Werror -Wno-unused-function -DVALVE_CLIENT_HOST_TEST \
+cc -std=c11 -Wall -Wextra -Werror -Wno-unused-function -DADMIN_SETTINGS_HOST_TEST -DVALVE_CLIENT_HOST_TEST -DVALVE_UI_HOST_TEST -pthread \
     -ffunction-sections -fdata-sections \
-    -Itests/valve_dial/fakes -Iidf_app/main -Icommon -Iinclude \
-    tests/valve_dial/test_valve_integration.c idf_app/main/valve_ui_dial.c \
+    -Itests/valve_dial/fakes -Itests/admin_dial/http_fakes -Itests/admin_dial/fakes -Iidf_app/main -Icommon -Iinclude \
+    tests/valve_dial/test_valve_integration.c idf_app/main/valve_ui_dial.c idf_app/main/admin_settings_dial.c \
     idf_app/main/valve_client_dial.c idf_app/main/valve_logic.c \
     common/bridge_command_plan.c common/bridge_client.c common/controller_input.c \
     common/controller_action_router.c idf_app/main/controller_input_profile_dial.c \
@@ -56,18 +56,20 @@ assert 'xTaskCreate(worker_task, "valve_http", VALVE_HTTP_STACK_SIZE' in client
 assert 'uxTaskGetStackHighWaterMark(NULL)' in client
 assert 'if (s_touch_started_on_valve)' in touch
 press = touch[touch.index('if (s_touch_started_on_valve)'):touch.index('return;', touch.index('if (s_touch_started_on_valve)'))]
-assert 'valve_ui_touch(valve_touch_coordinate(x, s_current_rotation)' in press
+assert 'valve_ui_touch(x, y,' in press
 assert 'data->state = LV_INDEV_STATE_RELEASED' in press
 release = touch[touch.index('valve_gesture_t gesture = valve_gesture_classify', touch.index('/* Use the last real touch coordinate')):]
-assert release.index('gesture == VALVE_GESTURE_SWITCH_SCREEN') < release.index('valve_ui_touch(valve_touch_coordinate(s_touch_last_x, s_current_rotation)')
-assert 'lv_indev_reset(indev, NULL)' in release[:release.index('valve_ui_touch(valve_touch_coordinate(s_touch_last_x, s_current_rotation)')]
+assert release.index('gesture == VALVE_GESTURE_SWITCH_SCREEN') < release.index('valve_ui_touch(s_touch_last_x, s_touch_last_y,')
+assert 'lv_indev_reset(indev, NULL)' in release[:release.index('valve_ui_touch(s_touch_last_x, s_touch_last_y,')]
 pending = touch[touch.index('void platform_display_process_pending(void) {'):]
 assert 'if (s_pending_page_switch)' in pending
 assert pending.index('s_pending_page_switch = false;') < pending.index('valve_ui_toggle_page();')
 assert 'LV_EVENT_CLICKED' not in ui
+assert 'admin_store_load' not in ui and 'admin_store_save' not in ui
+assert 'valve_client_selected_duration_get' in ui
 assert 'data->state = s_touch_consumed ? LV_INDEV_STATE_RELEASED : LV_INDEV_STATE_PRESSED' in touch
 encoder = Path('idf_app/main/platform_input_idf.c').read_text()
-assert encoder.index('if (valve_ui_visible()) return;') < encoder.index('controller_input_dispatch_physical(&event)')
+assert encoder.index('if (admin_settings_input_blocked() || valve_ui_visible()) return;') < encoder.index('controller_input_dispatch_physical(&event)')
 assert encoder.index('if (display_get_state() != DISPLAY_STATE_NORMAL) valve_ui_wake();') < encoder.index('display_activity_detected();')
 PY
 

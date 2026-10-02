@@ -61,6 +61,32 @@
       "line_regex": ".*"
     },
     {
+      "id": "commissioning-upstream-firmware-reference",
+      "category": "historical-provenance",
+      "owner": "Valve Dial commissioning record",
+      "retirement": "Permanent while this bridge OTA warning refers to the upstream product image.",
+      "path_globs": [
+        "docs/valve-dial-commissioning.md"
+      ],
+      "tokens": [
+        "roon-knob"
+      ],
+      "line_regex": "^The\\ custom\\ firmware\\ has\\ no\\ bridge\\ OTA\\ check\\ or\\ update\\ action\\.\\ Configure\\ the\\ bridge\\ deployment\\ with\\ `FIRMWARE_AUTO_UPDATE=false`\\ so\\ it\\ does\\ not\\ auto\\-download\\ upstream\\ roon\\-knob\\ images\\.\\ Roon\\ control\\ continues\\ through\\ the\\ existing\\ bridge;\\ valve\\ requests\\ go\\ directly\\ to\\ the\\ Pi\\.\\ Future\\ remote\\ firmware\\ updates\\ require\\ a\\ dedicated\\ controlled\\ image\\ feed,\\ signature\\ verification,\\ rollback\\ design,\\ and\\ a\\ separate\\ review\\ and\\ physical\\ test\\.$"
+    },
+    {
+      "id": "commissioning-pt100-issue-reference",
+      "category": "historical-provenance",
+      "owner": "Valve Dial commissioning record",
+      "retirement": "Permanent while the historical PT100 issue link is retained.",
+      "path_globs": [
+        "docs/valve-dial-commissioning.md"
+      ],
+      "tokens": [
+        "roon-knob"
+      ],
+      "line_regex": "^GitHub\\ issue\\ \\[\\#7\\]\\(https://github\\.com/danikeuc/roon\\-knob/issues/7\\)\\ tracks\\ the\\ optional\\ PT100\\ temperature\\ display\\.\\ The\\ firmware\\ branch\\ `codex/waveshare\\-pt100\\-display`\\ starts\\ at\\ the\\ immutable\\ `v2\\.5\\.3\\-valve\\.1`\\ source\\ commit\\ `b32fd8a2ee1f3b2731fbc13179c605e86a8c0d0a`\\.\\ The\\ current\\ candidate\\ was\\ built\\ from\\ source\\ commit\\ `385979069a20c2a9f11ab7d02ef656563cd7855e`,\\ which\\ recognizes\\ JSON\\ Unicode\\-escaped\\ aliases\\ of\\ the\\ optional\\ telemetry\\ keys\\ and\\ moves\\ the\\ shower\\-page\\ temperature\\ label\\ inside\\ the\\ 360\\ \u00d7\\ 360\\ round\\ display's\\ visible\\ circle\\.\\ This\\ documentation\\ commit\\ follows\\ that\\ source\\ commit\\ and\\ records\\ its\\ build\\ evidence;\\ it\\ does\\ not\\ change\\ the\\ compiled\\ source\\ or\\ claim\\ that\\ the\\ binary\\ was\\ built\\ from\\ the\\ later\\ documentation\\ head\\.\\ The\\ earlier\\ candidate\\ from\\ `a8d90fad9cf3b01300bae516fcc2687fbae123eb`\\ is\\ superseded\\.$"
+    },
+    {
       "id": "historical-docker-output",
       "category": "historical-provenance",
       "owner": "Documentation provenance",
@@ -207,7 +233,8 @@
     },
     {
       "path": ".github/workflows/docker.yml",
-      "contains": "needs: [test-shared, build-idf, build-frame, build-rlcd, build-ble-off]"
+      "contains": "needs: [test-shared, test-dial-admin, build-idf, build-frame, build-rlcd, build-ble-off]",
+      "min_count": 2
     },
     {
       "path": ".github/workflows/docker.yml",
