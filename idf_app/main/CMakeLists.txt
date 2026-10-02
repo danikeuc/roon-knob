@@ -3,6 +3,10 @@ set(SRC_FILES
     "captive_portal.c"
     "config_server.c"
     "valve_config_dial.c"
+    "admin_store_dial.c"
+    "admin_auth_dial.c"
+    "admin_backend_dial.c"
+    "admin_crypto_dial.c"
     "valve_logic.c"
     "valve_client_dial.c"
     "valve_ui_dial.c"
@@ -73,6 +77,7 @@ idf_component_register(
         i2c_bsp
         lcd_touch_bsp
     PRIV_REQUIRES
+        mbedtls
         nvs_flash
         esp_http_client
         esp_http_server

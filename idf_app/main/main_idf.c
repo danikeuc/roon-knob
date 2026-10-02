@@ -312,13 +312,7 @@ void app_main(void) {
 
     // Initialize NVS for configuration storage
     esp_err_t err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        esp_err_t erase_err = nvs_flash_erase();
-        if (erase_err != ESP_OK) {
-            ESP_LOGW(TAG, "NVS erase failed, ignoring");
-        }
-        err = nvs_flash_init();
-    }
+    // Fail closed: automatic NVS erasure would remove administrator credentials.
     ESP_ERROR_CHECK(err);
 
     // Initialize display hardware (SPI, LCD panel) BEFORE lv_init
