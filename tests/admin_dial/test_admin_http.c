@@ -322,7 +322,71 @@ static void test_auth_error_mapping_and_malformed_json(void) {
     }
     config_server_stop();
 }
+
+/* Observe the real parser boundary without replacing its behavior. A host's
+ * larger stack hides the ESP32 stack exhaustion if we check only HTTP status. */
+static unsigned parser_calls;
+cJSON *admin_test_real_parse(const char *, size_t, const char **,
+                                        cJSON_bool);
+cJSON *admin_test_observed_parse(const char *body, size_t length,
+                                        const char **end, cJSON_bool complete) {
+    parser_calls++;
+    return admin_test_real_parse(body, length, end, complete);
+}
+
+static void test_nested_json_rejected_before_parser_and_auth(void) {
+    fixture_reset();
+    config_server_start();
+    char array[362], nested_array[384], nested_object[384];
+    memset(array, '[', 180);
+    array[180] = '0';
+    memset(array + 181, ']', 180);
+    array[361] = '\0';
+    snprintf(nested_array, sizeof(nested_array), "{\"unused\":%s}", array);
+    size_t position = 0;
+    for (unsigned i = 0; i < 60; i++) {
+        memcpy(nested_object + position, "{\"x\":", 5);
+        position += 5;
+    }
+    nested_object[position++] = '0';
+    for (unsigned i = 0; i < 60; i++) nested_object[position++] = '}';
+    nested_object[position] = '\0';
+    const char *bodies[] = {array, nested_array, nested_object,
+        "{\"pin\":\"0123\",\"unused\":[]}",
+        "{\"pin\":\"0123\",\"unused\":{}}"};
+    const char *paths[] = {"/admin/api/login", "/admin/api/setup",
+                           "/admin/api/recover"};
+    for (size_t p = 0; p < sizeof(paths) / sizeof(paths[0]); p++) {
+        for (size_t b = 0; b < sizeof(bodies) / sizeof(bodies[0]); b++) {
+            httpd_req_t req = fixture_request(paths[p], HTTP_POST, bodies[b]);
+            parser_calls = 0;
+            fixture_call(&req);
+            assert(fixture_status(&req) == 400);
+            assert(parser_calls == 0);
+            assert(auth_mutations == 0 && auth_queries == 0);
+            assert(reads == 0 && writes == 0 && !valid_session);
+        }
+    }
+    /* Delimiters inside strings, escaped quotes and escaped backslashes must
+     * not be interpreted as containers. They still use the real JSON parser. */
+    const char *valid[] = {
+        "{\"pin\":\"0123\",\"note\":\"[{}]\"}",
+        "{\"pin\":\"0123\",\"note\":\"escaped \\\"[{}]\\\" quote\"}",
+        "{\"pin\":\"0123\",\"note\":\"backslash \\\\\"}",
+        " \r\n {\"pin\":\"0123\",\"number\":7,\"bool\":true,\"nil\":null} \t"
+    };
+    for (size_t i = 0; i < sizeof(valid) / sizeof(valid[0]); i++) {
+        httpd_req_t req = fixture_request("/admin/api/login", HTTP_POST, valid[i]);
+        parser_calls = 0;
+        fixture_call(&req);
+        assert(parser_calls == 1);
+        assert(fixture_status(&req) == 200);
+    }
+    config_server_stop();
+}
+
 int main(void) {
+    test_nested_json_rejected_before_parser_and_auth();
     test_all_legacy_forms_and_escaped_values();
     test_settings_binding_and_protected_api();
     test_auth_error_mapping_and_malformed_json();

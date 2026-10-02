@@ -202,6 +202,36 @@ static esp_err_t session_handler(httpd_req_t *req) {
     return reply(req, "200 OK", body);
 }
 
+/* Every API body is a flat object with scalar values. Bound container depth
+ * before cJSON's recursive parser runs on the 8 KiB HTTP task stack. Quoted
+ * delimiters and escaped quotes/backslashes remain ordinary string content;
+ * cJSON still validates the complete JSON grammar afterward. */
+static bool flat_object_body(const char *body, size_t length) {
+    bool opened = false, closed = false, quoted = false, escaped = false;
+    for (size_t i = 0; i < length; ++i) {
+        char c = body[i];
+        if (quoted) {
+            if (escaped) escaped = false;
+            else if (c == '\\') escaped = true;
+            else if (c == '"') quoted = false;
+            continue;
+        }
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (closed) return false;
+        if (!opened) {
+            if (c != '{') return false;
+            opened = true;
+        } else if (c == '"') {
+            quoted = true;
+        } else if (c == '[' || c == ']' || c == '{') {
+            return false;
+        } else if (c == '}') {
+            closed = true;
+        }
+    }
+    return opened && closed && !quoted;
+}
+
 static cJSON *read_json(httpd_req_t *req) {
     char type[64], body[BODY_MAX + 1];
     if (!header(req, "Content-Type", type, sizeof(type)) ||
@@ -220,6 +250,10 @@ static cJSON *read_json(httpd_req_t *req) {
         received += (size_t)n;
     }
     body[received] = '\0';
+    if (!flat_object_body(body, received)) {
+        result_reply(req, ADMIN_INVALID);
+        return NULL;
+    }
     const char *end = NULL;
     cJSON *json = cJSON_ParseWithLengthOpts(body, received + 1, &end, true);
     if (!cJSON_IsObject(json) || memchr(body, '\0', received) || strstr(body, "\\u0000")) {

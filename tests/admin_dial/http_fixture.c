@@ -15,7 +15,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 httpd_uri_t routes[40];
-int route_count,fail_registration=-1,reads,writes,auth_queries;
+int route_count,fail_registration=-1,reads,writes,auth_queries,auth_mutations;
 char fixture_logs[8192];
 bool configured,valid_session,storage_error;
 admin_result_t next_auth=ADMIN_OK;
@@ -32,7 +32,7 @@ void fixture_log(const char *format,...) {
 }
 void fixture_reset(void) {
     fixture_logs[0]=0;
-    route_count=reads=writes=auth_queries=elapsed=0;
+    route_count=reads=writes=auth_queries=auth_mutations=elapsed=0;
     fail_registration=-1;
     configured=true;
     valid_session=false;
@@ -191,6 +191,7 @@ admin_result_t admin_auth_is_configured(bool*out) {
     return ADMIN_OK;
 }
 admin_result_t admin_auth_setup(const char*p,const char*r,char*out) {
+    auth_mutations++;
     if(next_auth!=ADMIN_OK)return next_auth;
     if(strcmp(p,r))return ADMIN_INVALID;
     if(configured)return ADMIN_CONFLICT;
@@ -199,6 +200,7 @@ admin_result_t admin_auth_setup(const char*p,const char*r,char*out) {
     return ADMIN_OK;
 }
 admin_result_t admin_auth_login(const char*p,char*out) {
+    auth_mutations++;
     (void)p;
     if(storage_error)return ADMIN_STORAGE_ERROR;
     if(next_auth!=ADMIN_OK)return next_auth;
@@ -220,6 +222,7 @@ void admin_auth_logout(const char*s) {
     valid_session=false;
 }
 admin_result_t admin_auth_recover(const char*c,const char*p,const char*r,char*out) {
+    auth_mutations++;
     (void)c;
     (void)p;
     (void)r;
