@@ -2,6 +2,10 @@
 #include "valve_config_dial.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdatomic.h>
+#ifndef VALVE_CLIENT_HOST_TEST
+#include "admin_store_dial.h"
+#endif
 #ifndef VALVE_CLIENT_HOST_TEST
 #include <esp_http_client.h>
 #include <esp_log.h>
@@ -18,7 +22,7 @@
 
 typedef struct work_item {
     bool post;
-    valve_action_t action;
+    valve_request_t request;
     uint32_t session;
     uint32_t config_generation;
     uint32_t request_id;
@@ -26,6 +30,23 @@ typedef struct work_item {
 static bool s_connected;
 static uint32_t s_session;
 static uint32_t s_next_request_id;
+static atomic_uint s_selected_duration = ATOMIC_VAR_INIT(0);
+bool valve_client_selected_duration_get(uint16_t *seconds) {
+    unsigned value = atomic_load(&s_selected_duration);
+    if (!seconds || value < 60 || value > 600 || value % 60) return false;
+    *seconds = (uint16_t)value;
+    return true;
+}
+static void finish_duration_load(uint16_t seconds) {
+    if (seconds < 60 || seconds > 600 || seconds % 60) return;
+    unsigned expected = 0;
+    (void)atomic_compare_exchange_strong(&s_selected_duration, &expected, seconds);
+}
+bool valve_client_selected_duration_publish(uint16_t seconds) {
+    if (seconds < 60 || seconds > 600 || seconds % 60) return false;
+    atomic_store(&s_selected_duration, seconds);
+    return true;
+}
 #ifndef VALVE_CLIENT_HOST_TEST
 static portMUX_TYPE s_session_lock = portMUX_INITIALIZER_UNLOCKED;
 #endif
@@ -55,17 +76,20 @@ uint32_t valve_client_current_session(void) {
     (void)session_snapshot(&session);
     return session;
 }
-static bool prepare_work(bool post, valve_action_t action, work_item_t *work,
+static bool prepare_work(bool post, const valve_request_t *request, work_item_t *work,
                          uint32_t *request_id) {
-    if (!work || (post && action != VALVE_ACTION_START_600S && action != VALVE_ACTION_DRAIN))
-        return false;
+    if (!work || !request || (post && request->action != VALVE_ACTION_START &&
+        request->action != VALVE_ACTION_DRAIN) ||
+        (post && request->action == VALVE_ACTION_START &&
+         (request->duration_seconds < 60 || request->duration_seconds > 600 ||
+          request->duration_seconds % 60))) return false;
 #ifndef VALVE_CLIENT_HOST_TEST
     portENTER_CRITICAL(&s_session_lock);
 #endif
     bool connected = s_connected && !(valve_config_generation() & 1u);
     if (connected) {
         work->post = post;
-        work->action = action;
+        work->request = *request;
         work->session = s_session;
         work->config_generation = valve_config_generation();
         work->request_id = ++s_next_request_id;
@@ -93,6 +117,7 @@ static void *s_transport_context;
 static bool s_pending_get;
 static struct work_item s_host_queue[8];
 static unsigned s_host_head, s_host_count;
+void valve_client_test_finish_duration_load(uint16_t seconds) { finish_duration_load(seconds); }
 void valve_client_test_transport(valve_client_transport_fn transport, void *context) {
     s_transport = transport; s_transport_context = context;
 }
@@ -102,7 +127,7 @@ static TaskHandle_t s_worker;
 static const char *TAG = "valve_client";
 
 static int esp_transport(const char *method, const char *url, const char *token,
-                         int *http_status, char *response, size_t cap,
+                         const char *body, size_t body_len, int *http_status, char *response, size_t cap,
                          size_t *response_len, void *context) {
     (void)context;
     esp_http_client_config_t config = {
@@ -114,8 +139,10 @@ static int esp_transport(const char *method, const char *url, const char *token,
     int result = -1;
     if (esp_http_client_set_header(client, "X-Display-Token", token) != ESP_OK ||
         esp_http_client_set_header(client, "Accept", "application/json") != ESP_OK) goto done;
-    esp_err_t err = esp_http_client_open(client, 0);
+    if (body_len && esp_http_client_set_header(client, "Content-Type", "application/json") != ESP_OK) goto done;
+    esp_err_t err = esp_http_client_open(client, (int)body_len);
     if (err != ESP_OK) { result = err == ESP_ERR_TIMEOUT ? -3 : -1; goto done; }
+    if (body_len && esp_http_client_write(client, body, (int)body_len) != (int)body_len) goto done;
     int content_length = esp_http_client_fetch_headers(client);
     if (content_length < 0) goto done;
     *http_status = esp_http_client_get_status_code(client);
@@ -152,6 +179,7 @@ static bool credentials_load(credentials_t *credentials) {
         credentials->generation == valve_config_generation();
 }
 static valve_client_result_t request(const char *method, const char *route,
+                                     const char *body, size_t body_len,
                                      bool parse_status, valve_status_t *out,
                                      const credentials_t *credentials) {
     if (!out) return VALVE_CLIENT_INVALID;
@@ -166,10 +194,10 @@ static valve_client_result_t request(const char *method, const char *route,
     if (n < 0 || (size_t)n >= sizeof url) return VALVE_CLIENT_INVALID;
     char response[RESPONSE_CAP]; size_t response_len = 0; int http_status = 0;
 #ifdef VALVE_CLIENT_HOST_TEST
-    int rc = s_transport ? s_transport(method, url, credentials->token, &http_status, response,
+    int rc = s_transport ? s_transport(method, url, credentials->token, body, body_len, &http_status, response,
                                         sizeof response, &response_len, s_transport_context) : -1;
 #else
-    int rc = esp_transport(method, url, credentials->token, &http_status, response,
+    int rc = esp_transport(method, url, credentials->token, body, body_len, &http_status, response,
                            sizeof response, &response_len, NULL);
 #endif
     if (rc == -2 || response_len > sizeof response) return VALVE_CLIENT_INVALID;
@@ -183,29 +211,48 @@ static valve_client_result_t request(const char *method, const char *route,
         return VALVE_CLIENT_INVALID;
     return VALVE_CLIENT_OK;
 }
-static valve_client_result_t post_snapshot(valve_action_t action, valve_status_t *out,
-                                           const credentials_t *credentials) {
-    if (!out) return VALVE_CLIENT_INVALID;
+static valve_client_result_t post_snapshot(const valve_request_t *action, valve_status_t *out,
+                                           const credentials_t *credentials,
+                                           const work_item_t *work) {
+    if (!out || !action) return VALVE_CLIENT_INVALID;
     memset(out, 0, sizeof *out); out->state = VALVE_UNKNOWN;
-    const char *route = action == VALVE_ACTION_START_600S ? START_ROUTE :
-                        action == VALVE_ACTION_DRAIN ? DRAIN_ROUTE : NULL;
+    const char *route = action->action == VALVE_ACTION_START ? START_ROUTE :
+                        action->action == VALVE_ACTION_DRAIN ? DRAIN_ROUTE : NULL;
     if (!route) return VALVE_CLIENT_INVALID;
-    valve_client_result_t result = request("POST", route, false, out, credentials);
+    char body[32] = {0}; size_t body_len = 0;
+    if (action->action == VALVE_ACTION_START) {
+        if (action->duration_seconds < 60 || action->duration_seconds > 600 ||
+            action->duration_seconds % 60) return VALVE_CLIENT_INVALID;
+        valve_status_t preflight;
+        valve_client_result_t check = request("GET", STATUS_ROUTE, NULL, 0, true,
+                                              &preflight, credentials);
+        if (check != VALVE_CLIENT_OK) return check;
+        if (preflight.state != VALVE_DRAIN || (work && !work_allowed(work)) ||
+            credentials->generation != valve_config_generation()) return VALVE_CLIENT_INVALID;
+        if (preflight.timed_shower_duration_supported) {
+            int n = snprintf(body, sizeof body, "{\"duration_seconds\":%u}",
+                             action->duration_seconds);
+            if (n < 0 || (size_t)n >= sizeof body) return VALVE_CLIENT_INVALID;
+            body_len = (size_t)n;
+        } else if (action->duration_seconds != 600) return VALVE_CLIENT_INVALID;
+    }
+    valve_client_result_t result = request("POST", route, body_len ? body : NULL,
+                                           body_len, false, out, credentials);
     if (result == VALVE_CLIENT_OK)
-        result = request("GET", STATUS_ROUTE, true, out, credentials);
+        result = request("GET", STATUS_ROUTE, NULL, 0, true, out, credentials);
     return result;
 }
 valve_client_result_t valve_client_get_status(valve_status_t *out) {
     credentials_t credentials = {0};
     valve_client_result_t result = credentials_load(&credentials) ?
-        request("GET", STATUS_ROUTE, true, out, &credentials) : VALVE_CLIENT_INVALID;
+        request("GET", STATUS_ROUTE, NULL, 0, true, out, &credentials) : VALVE_CLIENT_INVALID;
     memset(&credentials, 0, sizeof credentials);
     return result;
 }
-valve_client_result_t valve_client_post(valve_action_t action, valve_status_t *out) {
+valve_client_result_t valve_client_post(const valve_request_t *action, valve_status_t *out) {
     credentials_t credentials = {0};
     valve_client_result_t result = credentials_load(&credentials) ?
-        post_snapshot(action, out, &credentials) : VALVE_CLIENT_INVALID;
+        post_snapshot(action, out, &credentials, NULL) : VALVE_CLIENT_INVALID;
 #ifdef VALVE_CLIENT_HOST_TEST
     if (result != VALVE_CLIENT_OK && result != VALVE_CLIENT_INVALID) s_pending_get = true;
 #endif
@@ -220,8 +267,8 @@ static void dispatch(const work_item_t *work) {
     uint32_t current;
     if (!session_snapshot(&current)) goto done;
     valve_status_t status;
-    valve_client_result_t result = work->post ? post_snapshot(work->action, &status, &credentials)
-        : request("GET", STATUS_ROUTE, true, &status, &credentials);
+    valve_client_result_t result = work->post ? post_snapshot(&work->request, &status, &credentials, work)
+        : request("GET", STATUS_ROUTE, NULL, 0, true, &status, &credentials);
     if (!work_allowed(work)) goto done;
     if (s_callback) {
         valve_client_event_t event = {.result = result, .status = status,
@@ -233,7 +280,7 @@ static void dispatch(const work_item_t *work) {
     if (work->post && result != VALVE_CLIENT_OK &&
         session_snapshot(&current) && current == work->session) {
         valve_status_t reconciled;
-        valve_client_result_t check = request("GET", STATUS_ROUTE, true, &reconciled, &credentials);
+        valve_client_result_t check = request("GET", STATUS_ROUTE, NULL, 0, true, &reconciled, &credentials);
         if (!work_allowed(work)) goto done;
         if (s_callback) {
             valve_client_event_t event = {.result = check, .status = reconciled,
@@ -290,25 +337,23 @@ bool valve_client_start(valve_client_callback_fn callback, void *context) {
 bool valve_client_request_get(void) {
     return valve_client_request_get_tagged(NULL);
 }
-bool valve_client_request_post(valve_action_t action) {
-    return valve_client_request_post_tagged(action, NULL);
-}
 bool valve_client_request_get_tagged(uint32_t *request_id) {
     work_item_t item;
-    return prepare_work(false, VALVE_ACTION_DRAIN, &item, request_id) && host_enqueue(item);
+    return prepare_work(false, &(valve_request_t){.action = VALVE_ACTION_DRAIN}, &item, request_id) && host_enqueue(item);
 }
-bool valve_client_request_post_tagged(valve_action_t action, uint32_t *request_id) {
-    return valve_client_request_post_for_config(action, valve_config_generation(), request_id);
-}
-bool valve_client_request_post_for_config(valve_action_t action, uint32_t generation, uint32_t *request_id) {
+bool valve_client_request_post_for_config(const valve_request_t *request, uint32_t generation, uint32_t *request_id) {
     work_item_t item;
-    return prepare_work(true, action, &item, request_id) &&
+    return prepare_work(true, request, &item, request_id) &&
            item.config_generation == generation && host_enqueue(item);
 }
 #else
 static void worker_task(void *context) {
     (void)context;
     s_worker = xTaskGetCurrentTaskHandle();
+    admin_settings_t settings;
+    if (admin_store_load(&settings) == ESP_OK) {
+        finish_duration_load(settings.duration_seconds);
+    }
     work_item_t work;
     UBaseType_t lowest_free_bytes = VALVE_HTTP_STACK_SIZE;
     for (;;) {
@@ -336,20 +381,14 @@ bool valve_client_start(valve_client_callback_fn callback, void *context) {
 bool valve_client_request_get(void) {
     return valve_client_request_get_tagged(NULL);
 }
-bool valve_client_request_post(valve_action_t action) {
-    return valve_client_request_post_tagged(action, NULL);
-}
 bool valve_client_request_get_tagged(uint32_t *request_id) {
     work_item_t item;
-    return s_queue && prepare_work(false, VALVE_ACTION_DRAIN, &item, request_id) &&
+    return s_queue && prepare_work(false, &(valve_request_t){.action = VALVE_ACTION_DRAIN}, &item, request_id) &&
            xQueueSend(s_queue, &item, 0) == pdTRUE;
 }
-bool valve_client_request_post_tagged(valve_action_t action, uint32_t *request_id) {
-    return valve_client_request_post_for_config(action, valve_config_generation(), request_id);
-}
-bool valve_client_request_post_for_config(valve_action_t action, uint32_t generation, uint32_t *request_id) {
+bool valve_client_request_post_for_config(const valve_request_t *request, uint32_t generation, uint32_t *request_id) {
     work_item_t item;
-    return s_queue && prepare_work(true, action, &item, request_id) &&
+    return s_queue && prepare_work(true, request, &item, request_id) &&
            item.config_generation == generation && xQueueSend(s_queue, &item, 0) == pdTRUE;
 }
 #endif

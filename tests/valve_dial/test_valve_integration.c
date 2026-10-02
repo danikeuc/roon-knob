@@ -71,7 +71,7 @@ void ui_set_valve_active(bool active) { valve_indicator = active; }
 
 static const char *const secret = "integration-private-token";
 static unsigned start_posts, drain_posts, bridge_posts;
-static bool pi_online = true, bridge_playing;
+static bool pi_online = true, bridge_playing, duration_capability;
 static uint32_t pi_deadline_ms;
 static char request_trace[128];
 static uint32_t config_generation;
@@ -83,18 +83,24 @@ bool valve_config_load(char *url, size_t ul, char *token, size_t tl) {
     return true;
 }
 static int fake_pi_transport(const char *method, const char *url, const char *token,
-                             int *status, char *response, size_t cap, size_t *len, void *ctx) {
+                             const char *request_body, size_t request_len, int *status, char *response, size_t cap, size_t *len, void *ctx) {
     (void)ctx;
     assert(strcmp(token, secret) == 0);
     assert(strstr(url, secret) == NULL && strchr(url, '?') == NULL);
     assert(strncmp(url, "http://fake-pi:8081/api/v1/display/", strlen("http://fake-pi:8081/api/v1/display/")) == 0);
     if (!pi_online) return -3;
+    assert(request_len == 0 || (request_body && request_len == strlen(request_body)));
     const char *route = strrchr(url, '/');
     assert(route);
     if (strcmp(method, "POST") == 0) {
         posts++;
         if (strcmp(route, "/timed-shower") == 0) {
-            start_posts++; pi_deadline_ms = fake_now + 600000;
+            unsigned seconds = 600;
+            if (duration_capability) {
+                assert(request_body && strcmp(request_body, "{\"duration_seconds\":300}") == 0);
+                seconds = 300;
+            } else assert(!request_body && request_len == 0);
+            start_posts++; pi_deadline_ms = fake_now + seconds * 1000u;
             strcat(request_trace, "S");
         } else {
             assert(strcmp(route, "/drain") == 0);
@@ -109,8 +115,9 @@ static int fake_pi_transport(const char *method, const char *url, const char *to
         unsigned remaining = pi_deadline_ms > fake_now ? (pi_deadline_ms - fake_now) / 1000 : 0;
         bool supply = pi_deadline_ms > fake_now;
         int n = snprintf(response, cap,
-            "{\"mode\":\"manual_timed\",\"state\":\"%s\",\"command\":\"%s\",\"reason\":\"mock\",\"remaining_seconds\":%u}",
-            supply ? "TIMED_SHOWER" : "MANUAL_DRAIN", supply ? "SUPPLY" : "DRAIN", remaining);
+            "{\"mode\":\"manual_timed\",\"state\":\"%s\",\"command\":\"%s\",\"reason\":\"mock\",\"remaining_seconds\":%u,\"timed_shower_duration_supported\":%s}",
+            supply ? "TIMED_SHOWER" : "MANUAL_DRAIN", supply ? "SUPPLY" : "DRAIN", remaining,
+            duration_capability ? "true" : "false");
         assert(n > 0 && (size_t)n < cap);
         *status = 200; *len = (size_t)n;
     }
@@ -167,6 +174,7 @@ static void flush(void) {
 }
 int main(void) {
     valve_client_test_transport(fake_pi_transport, NULL);
+    assert(valve_client_selected_duration_publish(600));
     valve_ui_init();
     valve_client_on_reconnect();
     valve_ui_connected(true);
@@ -243,6 +251,25 @@ int main(void) {
     assert(controller_input_dispatch_control(CONTROLLER_CONTROL_INTENT_NEXT));
     assert(bridge_posts == 2);
     assert(strcmp(objects[2].text, "OFF") == 0);
-    puts("mock Pi + bridge integration session passed (Roon input/router/client, page switch, hold, 600s, DRAIN, reconnect, no replay, token redaction)");
+    /* Selected five minutes is captured in the queued physical intent. A later
+     * settings publication only changes the next idle start, not Pi's deadline. */
+    duration_capability = true;
+    assert(valve_client_selected_duration_publish(300));
+    valve_ui_show(true); flush();
+    assert(strcmp(objects[5].text, "HOLD 2s\n5 MIN") == 0);
+    valve_ui_touch(100, 260, true, false, fake_now);
+    fake_now += 2000; valve_ui_touch(100, 260, true, false, fake_now);
+    assert(start_posts == 1);
+    assert(valve_client_selected_duration_publish(600)); /* queued intent keeps 300 */
+    flush();
+    assert(start_posts == 2 && strcmp(objects[5].text, "5:00") == 0);
+    assert(valve_client_selected_duration_publish(300));
+    assert(valve_client_selected_duration_publish(600));
+    flush();
+    assert(start_posts == 2 && strcmp(objects[5].text, "5:00") == 0);
+    fake_now += 30000; valve_ui_wake(); flush();
+    assert(strcmp(objects[5].text, "4:30") == 0);
+    assert(start_posts == 2);
+    puts("mock Pi + bridge integration session passed (Roon input/router/client, page switch, hold, 600s/300s, DRAIN, reconnect, no replay, token redaction)");
     return 0;
 }

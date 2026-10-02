@@ -14,6 +14,8 @@ static valve_client_callback_fn client_callback;
 static void *client_context;
 static int posts, gets, valve_indicator;
 static valve_action_t last_action;
+static uint16_t last_duration, selected_duration = 600;
+static bool selected_ready;
 static lv_obj_t objects[80];
 static unsigned object_count;
 static lv_obj_t screen;
@@ -77,13 +79,15 @@ bool valve_client_start(valve_client_callback_fn callback, void *context) {
     client_callback = callback; client_context = context; return true;
 }
 bool valve_client_request_get_tagged(uint32_t *id) { gets++; next_id++; if (id) *id = next_id; return true; }
-bool valve_client_request_post_tagged(valve_action_t action, uint32_t *id) {
-    assert(action == VALVE_ACTION_START_600S || action == VALVE_ACTION_DRAIN);
-    last_action = action;
+bool valve_client_request_post_for_config(const valve_request_t *request, uint32_t generation, uint32_t *id) {
+    if (!request || generation != config_generation) return false;
+    assert(request->action == VALVE_ACTION_START || request->action == VALVE_ACTION_DRAIN);
+    last_action = request->action; last_duration = request->duration_seconds;
     posts++; next_id++; if (id) *id = next_id; return true;
 }
-bool valve_client_request_post_for_config(valve_action_t action, uint32_t generation, uint32_t *id) {
-    return generation == config_generation && valve_client_request_post_tagged(action, id);
+bool valve_client_selected_duration_get(uint16_t *seconds) {
+    if (!selected_ready || !seconds) return false;
+    *seconds = selected_duration; return true;
 }
 uint32_t valve_client_current_session(void) { return session; }
 static lv_obj_t *find_label(const char *text) {
@@ -144,6 +148,13 @@ int main(void) {
     valve_ui_process(fake_now - 1, true);
     assert(strcmp(objects[2].text, "OFF") == 0);
     assert(strcmp(temperature->text, "6,4 °C") == 0);
+    assert(strcmp(objects[5].text, "LOADING") == 0);
+    valve_ui_touch(100, 260, true, false, 1100);
+    valve_ui_touch(100, 260, true, false, 3100);
+    assert(posts == 0);
+    valve_ui_cancel_touch();
+    selected_ready = true;
+    process();
     assert(strcmp(objects[5].text, "HOLD 2s\n10 MIN") == 0);
     assert(objects[11].flags & LV_OBJ_FLAG_HIDDEN);   /* no water while DRAIN */
     assert(!(objects[48].flags & LV_OBJ_FLAG_HIDDEN)); /* snowflake visible */
@@ -152,7 +163,7 @@ int main(void) {
     uint32_t old_get = next_id;
     valve_ui_touch(100, 260, true, false, 1100);
     valve_ui_touch(100, 260, true, false, 3100);
-    assert(posts == 1);
+    assert(posts == 1 && last_action == VALVE_ACTION_START && last_duration == 600);
     assert(strcmp(temperature->text, "---") == 0); /* pending action clears old reading */
     uint32_t action = next_id;
     emit(old_get, session, VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_OK, VALVE_DRAIN);
@@ -308,5 +319,36 @@ int main(void) {
     valve_ui_show(true);
     assert(!(objects[0].flags & LV_OBJ_FLAG_HIDDEN));
     assert(strcmp(temperature->text, "6,4 °C") == 0);
+    /* Saved short duration without a fresh capability cannot authorize START. */
+    valve_ui_cancel_touch();
+    selected_duration = 300;
+    healthy.timed_shower_duration_supported = false;
+    valve_ui_set_status(&healthy);
+    assert(strcmp(objects[5].text, "HOLD 2s\n5 MIN") == 0);
+    bool supported = true;
+    assert(valve_ui_duration_capability_get(&supported) && !supported);
+    int before_short = posts;
+    valve_ui_touch(100, 260, true, false, fake_now);
+    valve_ui_touch(100, 260, true, false, fake_now + 2000);
+    assert(posts == before_short);
+    valve_ui_cancel_touch();
+    healthy.timed_shower_duration_supported = true;
+    valve_ui_set_status(&healthy);
+    assert(valve_ui_duration_capability_get(&supported) && supported);
+    valve_ui_touch(100, 260, true, false, fake_now);
+    valve_ui_touch(100, 260, true, false, fake_now + 2000);
+    assert(posts == before_short + 1 && last_duration == 300);
+    valve_ui_cancel_touch();
+    healthy.timed_shower_duration_supported = true;
+    valve_ui_set_status(&healthy);
+    fake_now += 11000;
+    process();
+    assert(!valve_ui_duration_capability_get(&supported));
+    int before_stale = posts;
+    valve_ui_touch(100, 260, true, false, fake_now);
+    valve_ui_touch(100, 260, true, false, fake_now + 2000);
+    assert(posts == before_stale); /* stale capability is not authorization */
+    valve_ui_touch(100, 260, false, false, fake_now + 2001);
+    assert(posts == before_stale + 1 && last_action == VALVE_ACTION_DRAIN);
     puts("valve UI sequence tests passed");
 }

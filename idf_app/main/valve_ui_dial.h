@@ -9,6 +9,8 @@ void valve_ui_show(bool visible);
 void valve_ui_toggle_page(void);
 bool valve_ui_visible(void);
 void valve_ui_set_status(const valve_status_t *status);
+/* False means no current same-session/config status; supported is then unchanged. */
+bool valve_ui_duration_capability_get(bool *supported);
 void valve_ui_set_unknown(const char *reason);
 void valve_ui_process(uint32_t now_ms, bool awake);
 /* Raw pointer input is withheld from LVGL while the valve page is visible. */

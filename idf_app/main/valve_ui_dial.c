@@ -53,10 +53,27 @@ static void completion_cb(const valve_client_event_t *event, void *context) {
         atomic_store(&s_completion_overflow, true);
 }
 
+static bool selected_start_request(valve_request_t *request) {
+    uint16_t seconds;
+    if (!valve_client_selected_duration_get(&seconds) ||
+        (seconds != 600 && !s_status.timed_shower_duration_supported)) return false;
+    if (request) *request = (valve_request_t){.action = VALVE_ACTION_START,
+                                                .duration_seconds = seconds};
+    return true;
+}
+
 static bool fresh(uint32_t now_ms) {
-    return s_config_generation == valve_config_generation() &&
+    return atomic_load(&s_connected) &&
+           s_gate.session == valve_client_current_session() &&
+           s_config_generation == valve_config_generation() &&
            !(s_config_generation & 1u) && !s_gate.pending && s_status.state != VALVE_UNKNOWN &&
            now_ms - s_status_at < STALE_MS;
+}
+
+bool valve_ui_duration_capability_get(bool *supported) {
+    if (!supported || !fresh(monotonic_ms())) return false;
+    *supported = s_status.timed_shower_duration_supported;
+    return true;
 }
 
 static lv_obj_t *make_container(lv_obj_t *parent, int x, int y, int width, int height) {
@@ -133,7 +150,12 @@ static void render(uint32_t now_ms) {
     } else if (s_status.state == VALVE_DRAIN) {
         lv_label_set_text(s_state, "OFF");
         lv_label_set_text(s_countdown, "");
-        lv_label_set_text(s_action_label, "HOLD 2s\n10 MIN");
+        uint16_t seconds;
+        char label[32];
+        if (valve_client_selected_duration_get(&seconds))
+            snprintf(label, sizeof label, "HOLD 2s\n%u MIN", seconds / 60);
+        else snprintf(label, sizeof label, "LOADING");
+        lv_label_set_text(s_action_label, label);
         lv_obj_add_flag(s_rain, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_snow, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_style_bg_color(s_relay_left, lv_color_hex(SCREEN_COLOR), 0);
@@ -155,8 +177,9 @@ static void render(uint32_t now_ms) {
         lv_obj_set_style_bg_color(s_relay_right, lv_color_hex(ACTIVE_COLOR), 0);
         lv_obj_set_style_bg_color(s_action, lv_color_hex(ACTION_DARK_COLOR), 0);
     }
-    bool supply = valve_supply_allowed(s_status.state, s_configured, s_connected,
-                                        current ? now_ms - s_status_at : STALE_MS);
+    bool supply = selected_start_request(NULL) &&
+        valve_supply_allowed(s_status.state, s_configured, s_connected,
+                             current ? now_ms - s_status_at : STALE_MS);
     bool drain = valve_drain_allowed(s_configured &&
                                      s_config_generation == valve_config_generation() &&
                                      !(s_config_generation & 1u), s_connected);
@@ -171,7 +194,7 @@ static void request_get(uint32_t now_ms) {
     if (valve_client_request_get_tagged(&request_id) && s_recovery_needed)
         valve_gate_overflow(&s_gate, request_id);
 }
-static void request_action(valve_action_t action) {
+static void request_action(const valve_request_t *request) {
     uint32_t now_ms = monotonic_ms();
     s_gate.pending = true;
     s_pending_since = now_ms;
@@ -179,7 +202,7 @@ static void request_action(valve_action_t action) {
     ui_set_valve_active(false);
     render(now_ms);
     uint32_t request_id;
-    if (!valve_client_request_post_for_config(action, s_config_generation, &request_id)) {
+    if (!valve_client_request_post_for_config(request, s_config_generation, &request_id)) {
         valve_ui_set_unknown("Request unavailable");
         request_get(now_ms);
     } else {
@@ -325,23 +348,27 @@ void valve_ui_touch(int x, int y, bool pressed, bool moved, uint32_t now_ms) {
     if (!pressed) {
         if (action_area && valve_drain_tap_allowed(s_touch_drain, s_touch_moved,
              VALVE_GESTURE_NONE, s_configured, atomic_load(&s_connected)))
-            request_action(VALVE_ACTION_DRAIN);
+            request_action(&(valve_request_t){.action = VALVE_ACTION_DRAIN});
         valve_ui_cancel_touch();
         return;
     }
     if (!s_touch_target_initialized) {
         s_touch_target_initialized = true;
         bool supply_action = action_area && fresh(now_ms) && s_status.state == VALVE_DRAIN &&
+            selected_start_request(NULL) &&
             valve_supply_allowed(s_status.state, s_configured, atomic_load(&s_connected),
                                  now_ms - s_status_at);
         s_touch_supply = supply_action;
         s_touch_drain = action_area && !supply_action;
     }
     s_touch_moved |= moved || ((s_touch_supply || s_touch_drain) && !action_area);
-    if (s_touch_supply && valve_supply_allowed(s_status.state, s_configured, s_connected,
-                                                now_ms - s_status_at) &&
-        valve_hold_update(&s_hold, true, s_touch_moved, now_ms))
-        request_action(VALVE_ACTION_START_600S);
+    if (s_touch_supply && fresh(now_ms) &&
+        valve_supply_allowed(s_status.state, s_configured, atomic_load(&s_connected),
+                             now_ms - s_status_at) &&
+        valve_hold_update(&s_hold, true, s_touch_moved, now_ms)) {
+        valve_request_t request;
+        if (selected_start_request(&request)) request_action(&request);
+    }
     if (!valve_supply_allowed(s_status.state, s_configured, s_connected,
                               now_ms - s_status_at))
         (void)valve_hold_update(&s_hold, true, true, now_ms);

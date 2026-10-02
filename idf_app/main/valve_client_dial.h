@@ -4,7 +4,8 @@
 typedef enum { VALVE_CLIENT_OK, VALVE_CLIENT_UNAUTHORIZED, VALVE_CLIENT_UNAVAILABLE, VALVE_CLIENT_INVALID,
                VALVE_CLIENT_CONFLICT, VALVE_CLIENT_SERVER_ERROR, VALVE_CLIENT_TIMEOUT } valve_client_result_t;
 typedef int (*valve_client_transport_fn)(const char *method, const char *url,
-                                          const char *token, int *http_status,
+                                          const char *token, const char *body, size_t body_len,
+                                          int *http_status,
                                           char *response, size_t response_cap,
                                           size_t *response_len, void *context);
 typedef enum { VALVE_CLIENT_EVENT_GET, VALVE_CLIENT_EVENT_POST_STATUS,
@@ -25,19 +26,23 @@ typedef void (*valve_client_callback_fn)(const valve_client_event_t *event, void
  * only until the callback returns. Each event carries its originating Wi-Fi
  * session and request ID, including a recovery GET after a failed POST. */
 valve_client_result_t valve_client_get_status(valve_status_t *out);
-valve_client_result_t valve_client_post(valve_action_t action, valve_status_t *out);
+valve_client_result_t valve_client_post(const valve_request_t *request, valve_status_t *out);
 bool valve_client_start(valve_client_callback_fn callback, void *context);
 bool valve_client_request_get(void);
-bool valve_client_request_post(valve_action_t action);
 bool valve_client_request_get_tagged(uint32_t *request_id);
-bool valve_client_request_post_tagged(valve_action_t action, uint32_t *request_id);
 /* UI authorization belongs to the generation of the displayed status. */
-bool valve_client_request_post_for_config(valve_action_t action, uint32_t generation, uint32_t *request_id);
+bool valve_client_request_post_for_config(const valve_request_t *request, uint32_t generation, uint32_t *request_id);
 uint32_t valve_client_current_session(void);
+/* Lock-free cache: false until durable settings have been loaded or a confirmed save published. */
+bool valve_client_selected_duration_get(uint16_t *seconds);
+/* Task 6 calls this only after admin_store_save confirms persistence and readback. */
+bool valve_client_selected_duration_publish(uint16_t seconds);
 void valve_client_on_disconnect(void);
 void valve_client_on_reconnect(void);
 #ifdef VALVE_CLIENT_HOST_TEST
 void valve_client_test_transport(valve_client_transport_fn transport, void *context);
 void valve_client_test_run_pending(void);
+/* Simulates a delayed durable load through the production CAS path. */
+void valve_client_test_finish_duration_load(uint16_t seconds);
 #endif
 #endif

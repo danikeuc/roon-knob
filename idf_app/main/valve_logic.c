@@ -207,6 +207,7 @@ bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
     unsigned seen = 0;
     bool temperature_seen = false, temperature_valid = false;
     bool health_seen = false, health_valid = false;
+    bool capability_seen = false, capability_valid = false;
     float temperature = 0.0f;
     int previous_end = tokens[0].start + 1;
     bool first = true;
@@ -244,6 +245,11 @@ bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
             if (temperature_seen) temperature_valid = false;
             else temperature_valid = temperature_token(json, val, &temperature);
             temperature_seen = true;
+        } else if (equal_optional_key(json, key, "timed_shower_duration_supported")) {
+            if (capability_seen) capability_valid = false;
+            else capability_valid = val->type == JSMN_PRIMITIVE &&
+                val->end - val->start == 4 && memcmp(json + val->start, "true", 4) == 0;
+            capability_seen = true;
         } else if (equal_optional_key(json, key, "sensor_health")) {
             if (health_seen) health_valid = false;
             else health_valid = equal_token(json, val, "HEALTHY");
@@ -262,6 +268,7 @@ bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
     else if (supply_state && supply_command && remaining > 0) out->state = VALVE_SUPPLY;
     else return false;
     out->remaining_seconds = remaining;
+    out->timed_shower_duration_supported = capability_seen && capability_valid;
     memcpy(out->reason, reason, sizeof reason);
     if (temperature_seen && temperature_valid && health_seen && health_valid) {
         out->pipe_temperature_c = temperature;

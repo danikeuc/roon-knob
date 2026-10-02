@@ -65,6 +65,8 @@ pending = touch[touch.index('void platform_display_process_pending(void) {'):]
 assert 'if (s_pending_page_switch)' in pending
 assert pending.index('s_pending_page_switch = false;') < pending.index('valve_ui_toggle_page();')
 assert 'LV_EVENT_CLICKED' not in ui
+assert 'admin_store_load' not in ui and 'admin_store_save' not in ui
+assert 'valve_client_selected_duration_get' in ui
 assert 'data->state = s_touch_consumed ? LV_INDEV_STATE_RELEASED : LV_INDEV_STATE_PRESSED' in touch
 encoder = Path('idf_app/main/platform_input_idf.c').read_text()
 assert encoder.index('if (valve_ui_visible()) return;') < encoder.index('controller_input_dispatch_physical(&event)')
