@@ -16,6 +16,7 @@ set(SRC_FILES
     "ui_network.c"
     "platform_display_idf.c"
     "display_sleep.c"
+    "display_rotation_dial.c"
     "platform_storage_idf.c"
     "platform_http_idf.c"
     "platform_mdns_idf.c"

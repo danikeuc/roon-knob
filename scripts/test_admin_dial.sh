@@ -3,6 +3,10 @@ set -eu
 cd "$(dirname "$0")/.."
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
+cc -std=c11 -Wall -Wextra -Werror -Iidf_app/main \
+    tests/admin_dial/test_display_rotation.c idf_app/main/display_rotation_dial.c \
+    -o "$tmp_dir/test_display_rotation"
+"$tmp_dir/test_display_rotation"
 for suite in store auth; do
     extra_source=""
     if [ "$suite" = auth ]; then extra_source="idf_app/main/admin_store_dial.c"; fi
