@@ -9,6 +9,9 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <esp_timer.h>
+#ifdef VALVE_UI_HOST_TEST
+#include <pthread.h>
+#endif
 
 #define POLL_MS 5000u
 #define STALE_MS 10000u
@@ -17,7 +20,7 @@
 #define ACTIVE_COLOR 0x48D7E8u
 #define ACTION_DARK_COLOR 0x141C22u
 
-typedef struct { valve_client_event_t event; uint32_t received_at_ms; } completion_t;
+typedef struct { valve_client_event_t event; uint64_t received_at_ms; } completion_t;
 static QueueHandle_t s_completions;
 static lv_obj_t *s_overlay, *s_state, *s_countdown, *s_action, *s_action_label;
 static lv_obj_t *s_temperature;
@@ -36,6 +39,37 @@ static valve_observation_gate_t s_gate;
 static bool s_recovery_needed;
 static bool s_touch_moved;
 static uint32_t s_config_generation;
+/* UI owns writes. The exported getter takes a zero-wait lock or fails closed,
+ * so the HTTP task never observes a partial publication or waits on LVGL. */
+static valve_duration_capability_snapshot_t s_capability;
+#ifdef VALVE_UI_HOST_TEST
+static pthread_mutex_t s_capability_lock = PTHREAD_MUTEX_INITIALIZER;
+static void capability_write_lock(void) { (void)pthread_mutex_lock(&s_capability_lock); }
+static bool capability_read_try_lock(void) { return pthread_mutex_trylock(&s_capability_lock) == 0; }
+static void capability_unlock(void) { (void)pthread_mutex_unlock(&s_capability_lock); }
+void valve_ui_test_capability_lock(void) { capability_write_lock(); }
+void valve_ui_test_capability_unlock(void) { capability_unlock(); }
+#else
+static portMUX_TYPE s_capability_lock = portMUX_INITIALIZER_UNLOCKED;
+static void capability_write_lock(void) { portENTER_CRITICAL(&s_capability_lock); }
+static bool capability_read_try_lock(void) {
+    return portTRY_ENTER_CRITICAL(&s_capability_lock, 0) == pdPASS;
+}
+static void capability_unlock(void) { portEXIT_CRITICAL(&s_capability_lock); }
+#endif
+static uint64_t monotonic_full_ms(void) { return (uint64_t)(esp_timer_get_time() / 1000); }
+static void capability_publish(bool valid, bool supported, uint64_t receipt_ms,
+                               uint32_t session, uint32_t generation) {
+    capability_write_lock();
+    s_capability = (valve_duration_capability_snapshot_t){
+        .valid = valid, .supported = supported, .received_at_ms = receipt_ms,
+        .session = session, .config_generation = generation,
+    };
+    capability_unlock();
+}
+static void capability_invalidate(void) {
+    capability_publish(false, false, 0, 0, 0);
+}
 static void consume_touch(void) {
     if (!s_touch_target_initialized) return;
     s_touch_supply = s_touch_drain = false;
@@ -43,12 +77,12 @@ static void consume_touch(void) {
     (void)valve_hold_update(&s_hold, true, true, 0);
 }
 
-static uint32_t monotonic_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+static uint32_t monotonic_ms(void) { return (uint32_t)monotonic_full_ms(); }
 static void completion_cb(const valve_client_event_t *event, void *context) {
     (void)context;
     if (!s_completions) return;
     /* The client owns the event only through this callback. Queue an owned copy. */
-    completion_t copy = {.event = *event, .received_at_ms = monotonic_ms()};
+    completion_t copy = {.event = *event, .received_at_ms = monotonic_full_ms()};
     if (xQueueSend(s_completions, &copy, 0) != pdTRUE)
         atomic_store(&s_completion_overflow, true);
 }
@@ -70,9 +104,23 @@ static bool fresh(uint32_t now_ms) {
            now_ms - s_status_at < STALE_MS;
 }
 
+bool valve_ui_duration_capability_snapshot_get(valve_duration_capability_snapshot_t *out) {
+    if (!out || !capability_read_try_lock()) return false;
+    *out = s_capability;
+    capability_unlock();
+    return true;
+}
 bool valve_ui_duration_capability_get(bool *supported) {
-    if (!supported || !fresh(monotonic_ms())) return false;
-    *supported = s_status.timed_shower_duration_supported;
+    valve_duration_capability_snapshot_t snapshot;
+    if (!supported || !valve_ui_duration_capability_snapshot_get(&snapshot) ||
+        !snapshot.valid || !atomic_load(&s_connected) ||
+        snapshot.session != valve_client_current_session() ||
+        snapshot.config_generation != valve_config_generation() ||
+        (snapshot.config_generation & 1u)) return false;
+    uint64_t now_ms = monotonic_full_ms();
+    if (now_ms < snapshot.received_at_ms ||
+        now_ms - snapshot.received_at_ms >= STALE_MS) return false;
+    *supported = snapshot.supported;
     return true;
 }
 
@@ -191,12 +239,15 @@ static void render(uint32_t now_ms) {
 static void request_get(uint32_t now_ms) {
     s_last_get = now_ms;
     uint32_t request_id;
-    if (valve_client_request_get_tagged(&request_id) && s_recovery_needed)
+    if (valve_client_request_get_tagged(&request_id) && s_recovery_needed) {
         valve_gate_overflow(&s_gate, request_id);
+        capability_invalidate();
+    }
 }
 static void request_action(const valve_request_t *request) {
     uint32_t now_ms = monotonic_ms();
     s_gate.pending = true;
+    capability_invalidate();
     s_pending_since = now_ms;
     s_status.state = VALVE_UNKNOWN;
     ui_set_valve_active(false);
@@ -217,6 +268,7 @@ void valve_ui_init(void) {
     s_config_generation = valve_config_generation();
     s_status.state = VALVE_UNKNOWN;
     valve_gate_link(&s_gate, valve_client_current_session());
+    capability_invalidate();
     s_overlay = lv_obj_create(lv_screen_active());
     lv_obj_set_size(s_overlay, 360, 360);
     lv_obj_center(s_overlay);
@@ -265,14 +317,19 @@ bool valve_ui_visible(void) { return s_visible; }
 void valve_ui_set_status(const valve_status_t *status) {
     if (!status) return;
     s_status = *status;
-    s_status_at = monotonic_ms();
+    uint64_t received_at_ms = monotonic_full_ms();
+    s_status_at = (uint32_t)received_at_ms;
     s_gate.pending = false;
+    capability_publish(status->state != VALVE_UNKNOWN,
+                       status->timed_shower_duration_supported, received_at_ms,
+                       s_gate.session, s_config_generation);
     render(s_status_at);
 }
 void valve_ui_set_unknown(const char *reason) {
     (void)reason;
     s_status.state = VALVE_UNKNOWN;
     s_gate.pending = false;
+    capability_invalidate();
     consume_touch();
     render(monotonic_ms());
 }
@@ -282,6 +339,7 @@ static void fail_closed_overflow(uint32_t now_ms) {
     valve_ui_set_unknown("Completion overflow");
     s_recovery_needed = true;
     valve_gate_overflow(&s_gate, 0);
+    capability_invalidate();
     s_pending_since = now_ms;
     request_get(now_ms);
 }
@@ -315,17 +373,22 @@ void valve_ui_process(uint32_t now_ms, bool awake) {
         if (!connected || event->session != valve_client_current_session() ||
             event->config_generation != s_config_generation ||
             s_config_generation != valve_config_generation()) continue;
-        uint32_t received_age_ms = monotonic_ms() - completion.received_at_ms;
+        uint64_t received_age_ms = monotonic_full_ms() - completion.received_at_ms;
         bool valid = event->result == VALVE_CLIENT_OK &&
                      event->status.state != VALVE_UNKNOWN &&
+                     completion.received_at_ms <= monotonic_full_ms() &&
                      received_age_ms < STALE_MS;
         if (valve_gate_accept(&s_gate, event->session, event->request_id, valid)) {
             s_status = event->status;
-            s_status_at = completion.received_at_ms;
+            s_status_at = (uint32_t)completion.received_at_ms;
+            capability_publish(true, s_status.timed_shower_duration_supported,
+                               completion.received_at_ms, event->session,
+                               event->config_generation);
             s_recovery_needed = false;
         } else if (event->request_id >= s_gate.minimum_request_id &&
                    event->session == s_gate.session && !valid) {
             s_status.state = VALVE_UNKNOWN;
+            capability_invalidate();
             consume_touch();
         }
     }

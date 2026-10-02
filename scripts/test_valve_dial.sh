@@ -31,10 +31,10 @@ cc -std=c11 -Wall -Wextra -Werror -DVALVE_CLIENT_HOST_TEST -Iidf_app/main \
     tests/valve_dial/test_valve_logic.c idf_app/main/valve_logic.c \
     idf_app/main/valve_client_dial.c -o "$tmp_dir/test_valve_logic"
 "$tmp_dir/test_valve_logic"
-cc -std=c11 -Wall -Wextra -Werror -Itests/valve_dial/fakes -Iidf_app/main -Icommon \
+cc -std=c11 -Wall -Wextra -Werror -pthread -DVALVE_UI_HOST_TEST -Itests/valve_dial/fakes -Iidf_app/main -Icommon \
     tests/valve_dial/test_valve_ui_sequence.c idf_app/main/valve_ui_dial.c \
     idf_app/main/valve_logic.c -o "$tmp_dir/test_valve_ui_sequence"
-cc -std=c11 -Wall -Wextra -Werror -Wno-unused-function -DVALVE_CLIENT_HOST_TEST \
+cc -std=c11 -Wall -Wextra -Werror -Wno-unused-function -DVALVE_CLIENT_HOST_TEST -DVALVE_UI_HOST_TEST -pthread \
     -ffunction-sections -fdata-sections \
     -Itests/valve_dial/fakes -Iidf_app/main -Icommon -Iinclude \
     tests/valve_dial/test_valve_integration.c idf_app/main/valve_ui_dial.c \
