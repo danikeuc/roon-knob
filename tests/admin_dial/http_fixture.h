@@ -13,3 +13,6 @@ void fixture_call(httpd_req_t*);
 int fixture_status(const httpd_req_t*);
 
 extern char fixture_logs[8192];
+
+extern bool fixture_socket_ipv6;
+extern const char *fixture_socket_address;

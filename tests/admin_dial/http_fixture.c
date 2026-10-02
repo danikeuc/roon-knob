@@ -18,6 +18,8 @@ httpd_uri_t routes[40];
 int route_count,fail_registration=-1,reads,writes,auth_queries,auth_mutations;
 char fixture_logs[8192];
 bool configured,valid_session,storage_error;
+bool fixture_socket_ipv6;
+const char *fixture_socket_address;
 admin_result_t next_auth=ADMIN_OK;
 static http_server_owner_t owner;
 static bool dns;
@@ -32,6 +34,8 @@ void fixture_log(const char *format,...) {
 }
 void fixture_reset(void) {
     fixture_logs[0]=0;
+    fixture_socket_ipv6=false;
+    fixture_socket_address="192.168.4.1";
     route_count=reads=writes=auth_queries=auth_mutations=elapsed=0;
     fail_registration=-1;
     configured=true;
@@ -166,13 +170,23 @@ int httpd_req_to_sockfd(httpd_req_t*r) {
 }
 int getsockname(int fd,struct sockaddr *out,socklen_t *len) {
     (void)fd;
-    assert(*len>=sizeof(struct sockaddr_in));
-    struct sockaddr_in a= {
-        .sin_family=AF_INET,.sin_port=htons(80)
-    };
-    inet_pton(AF_INET,"192.168.4.1",&a.sin_addr);
-    memcpy(out,&a,sizeof a);
-    *len=sizeof a;
+    struct sockaddr_storage storage = {0};
+    socklen_t actual;
+    if (fixture_socket_ipv6) {
+        struct sockaddr_in6 *a = (struct sockaddr_in6 *)&storage;
+        a->sin6_family=AF_INET6;
+        a->sin6_port=htons(80);
+        assert(inet_pton(AF_INET6,fixture_socket_address,&a->sin6_addr)==1);
+        actual=sizeof(*a);
+    } else {
+        struct sockaddr_in *a = (struct sockaddr_in *)&storage;
+        a->sin_family=AF_INET;
+        a->sin_port=htons(80);
+        assert(inet_pton(AF_INET,fixture_socket_address,&a->sin_addr)==1);
+        actual=sizeof(*a);
+    }
+    memcpy(out,&storage,*len<actual?*len:actual);
+    if (*len>actual) *len=actual;
     return 0;
 }
 esp_netif_t *esp_netif_get_handle_from_ifkey(const char*k) {

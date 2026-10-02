@@ -68,13 +68,25 @@ static bool trusted_host(httpd_req_t *req, char host[96]) {
         if (strcmp(port, ":80") != 0) return false;
         *port = '\0';
     }
-    struct sockaddr_in local = {0};
+    struct sockaddr_storage local = {0};
     socklen_t size = sizeof(local);
     char address[INET_ADDRSTRLEN];
+    const void *ipv4 = NULL;
     if (getsockname(httpd_req_to_sockfd(req), (struct sockaddr *)&local, &size) == 0 &&
-        local.sin_family == AF_INET &&
-        inet_ntop(AF_INET, &local.sin_addr, address, sizeof(address)) &&
-        strcmp(name, address) == 0) return true;
+        size <= sizeof(local)) {
+        if (local.ss_family == AF_INET && size >= sizeof(struct sockaddr_in)) {
+            ipv4 = &((const struct sockaddr_in *)&local)->sin_addr;
+        }
+#if !defined(ESP_PLATFORM) || LWIP_IPV6
+        if (local.ss_family == AF_INET6 && size >= sizeof(struct sockaddr_in6)) {
+            const struct in6_addr *addr = &((const struct sockaddr_in6 *)&local)->sin6_addr;
+            /* ESP-IDF's dual-stack listener reports IPv4 clients as mapped IPv6. */
+            if (IN6_IS_ADDR_V4MAPPED(addr)) ipv4 = &addr->s6_addr[12];
+        }
+#endif
+        if (ipv4 && inet_ntop(AF_INET, ipv4, address, sizeof(address)) &&
+            strcmp(name, address) == 0) return true;
+    }
     const char *keys[] = {"WIFI_STA_DEF", "WIFI_AP_DEF"};
     for (size_t i = 0; i < 2; ++i) {
         esp_netif_t *netif = esp_netif_get_handle_from_ifkey(keys[i]);

@@ -386,7 +386,49 @@ static void test_nested_json_rejected_before_parser_and_auth(void) {
     config_server_stop();
 }
 
+/* ESP-IDF listens on AF_INET6 when CONFIG_LWIP_IPV6=y, even for
+ * IPv4 browser clients. Rejecting mapped local addresses breaks first setup. */
+static void test_ipv4_host_on_dual_stack_socket(void) {
+    fixture_reset();
+    fixture_socket_ipv6=true;
+    fixture_socket_address="::ffff:192.168.4.1";
+    configured=false;
+    config_server_start();
+    httpd_req_t r=fixture_request("/admin/api/session",HTTP_GET,NULL);
+    fixture_call(&r);
+    assert(fixture_status(&r)==200);
+    assert(strstr(r.response,"\"setup_required\":true"));
+    r=fixture_request("/admin/api/session",HTTP_GET,NULL);
+    r.host="192.168.4.1:80";
+    fixture_call(&r);
+    assert(fixture_status(&r)==200);
+    r=fixture_request("/admin/api/setup",HTTP_POST,"{\"pin\":\"0123\",\"repeated_pin\":\"0123\"}");
+    fixture_call(&r);
+    assert(fixture_status(&r)==200 && configured);
+    login();
+    int previous_mutations=auth_mutations;
+    const char *hosts[]={"192.168.4.2","192.168.4.1.evil","evil.example","192.168.4.1:8080"};
+    for(size_t i=0;i<sizeof(hosts)/sizeof(hosts[0]);i++) {
+        r=fixture_request("/admin/api/session",HTTP_GET,NULL);
+        r.host=hosts[i];
+        fixture_call(&r);
+        assert(fixture_status(&r)==403);
+    }
+    r=fixture_request("/admin/api/login",HTTP_POST,"{\"pin\":\"0123\"}");
+    r.origin="http://evil.example";
+    fixture_call(&r);
+    assert(fixture_status(&r)==403 && auth_mutations==previous_mutations);
+    /* A native IPv6 address with the same trailing 32 bits is not IPv4. */
+    fixture_socket_address="2001:db8::c0a8:401";
+    r=fixture_request("/admin/api/session",HTTP_GET,NULL);
+    fixture_call(&r);
+    assert(fixture_status(&r)==403);
+    assert(reads==0 && writes==0);
+    config_server_stop();
+}
+
 int main(void) {
+    test_ipv4_host_on_dual_stack_socket();
     test_nested_json_rejected_before_parser_and_auth();
     test_all_legacy_forms_and_escaped_values();
     test_settings_binding_and_protected_api();
