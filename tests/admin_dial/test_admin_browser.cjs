@@ -12,7 +12,7 @@ function embedded(name) {
 (async()=>{
  const browser=await chromium.launch({...(process.env.BROWSER_PATH?{executablePath:process.env.BROWSER_PATH}:{}),headless:true});
  const page=await browser.newPage({viewport:{width:390,height:844},isMobile:true});
- let authenticated=false,setup=true,saveCount=0,failSave=false;
+ let authenticated=false,setup=true,saveCount=0,failSave=false,abortSessionAfterLogout=false;
  let value={duration_minutes:10,rotation_degrees:0,generation:1,duration_capability_available:true,short_duration_supported:true};
  const calls=[];
  await page.route('**/*',async route=>{
@@ -21,7 +21,7 @@ function embedded(name) {
   if(url.pathname==='/admin')return route.fulfill({contentType:'text/html',body:embedded('ADMIN_PAGE')});
   if(url.pathname==='/admin/forms.js')return route.fulfill({contentType:'application/javascript',body:embedded('ADMIN_FORMS_JS')});
   let data={};const op=url.pathname.split('/').pop();
-  if(op==='session')data={setup_required:setup,authenticated,...(authenticated?{csrf:'c'.repeat(64)}:{})};
+  if(op==='session'){if(abortSessionAfterLogout&&!authenticated)return route.abort('failed');data={setup_required:setup,authenticated,...(authenticated?{csrf:'c'.repeat(64)}:{})};}
   else if(op==='settings'){if(!authenticated)return route.fulfill({status:401,contentType:'application/json',body:'{}'});data=value;}
   else if(op==='setup'||op==='recover'||op==='recovery-code'){data={recovery_code:(op==='recovery-code'?'d':'b').repeat(32)};setup=false;}
   else if(op==='login')authenticated=true;
@@ -76,7 +76,7 @@ function embedded(name) {
  await page.locator('#recovery-code input[name=pin]').fill('0123');await page.locator('#recovery-code button').click();
  await page.locator('#recovery-once').waitFor({state:'visible'});
  assert.equal(await page.locator('#issued-code').textContent(),'d'.repeat(32));
- await page.locator('#logout button').click();await page.locator('#login').waitFor({state:'visible'});
+ abortSessionAfterLogout=true;await page.locator('#logout button').click();await page.locator('#login').waitFor({state:'visible',timeout:3000});
  assert.equal(await page.locator('#settings').isVisible(),false);
  assert.equal(await page.locator('#recovery-once').isVisible(),false);
  assert.equal(await page.locator('#issued-code').textContent(),'');
