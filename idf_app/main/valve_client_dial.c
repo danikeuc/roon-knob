@@ -4,6 +4,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdatomic.h>
+#ifdef VALVE_CLIENT_HTTP_HOST_TEST
+#include "esp_http_client.h"
+#endif
 #ifndef VALVE_CLIENT_HOST_TEST
 #include "admin_store_dial.h"
 #endif
@@ -26,6 +29,7 @@
 #define WEATHER_STOP_ROUTE "/api/v1/display/actions/stop"
 #define DRAIN_ROUTE "/api/v1/display/actions/drain"
 #define START_MAX_QUEUED_MS UINT64_C(10000)
+typedef struct { uint64_t origin_ms,expires_ms; } transport_deadline_t;
 
 typedef struct work_item {
     bool post;
@@ -151,11 +155,21 @@ void valve_client_test_clock(uint64_t (*clock_ms)(void)) { s_test_clock_ms = clo
 static QueueHandle_t s_queue;
 static TaskHandle_t s_worker;
 static const char *TAG = "valve_client";
+#endif
 
+#if !defined(VALVE_CLIENT_HOST_TEST) || defined(VALVE_CLIENT_HTTP_HOST_TEST)
+static bool transport_budget(esp_http_client_handle_t client,const transport_deadline_t *deadline) {
+    if(!deadline)return true;
+    uint64_t now=monotonic_ms();
+    if(now<deadline->origin_ms || now>=deadline->expires_ms)return false;
+    uint64_t remaining=deadline->expires_ms-now;
+    int timeout=(int)(remaining<3000?remaining:3000);
+    return esp_http_client_set_timeout_ms(client,timeout)==ESP_OK;
+}
 static int esp_transport(const char *method, const char *url, const char *token,
                          const char *body, size_t body_len, int *http_status, char *response, size_t cap,
                          size_t *response_len, void *context) {
-    (void)context;
+    const transport_deadline_t *deadline=context;
     esp_http_client_config_t config = {
         .url = url, .method = strcmp(method, "POST") == 0 ? HTTP_METHOD_POST : HTTP_METHOD_GET,
         .timeout_ms = 3000,
@@ -166,9 +180,12 @@ static int esp_transport(const char *method, const char *url, const char *token,
     if (esp_http_client_set_header(client, "X-Display-Token", token) != ESP_OK ||
         esp_http_client_set_header(client, "Accept", "application/json") != ESP_OK) goto done;
     if (body_len && esp_http_client_set_header(client, "Content-Type", "application/json") != ESP_OK) goto done;
+    if(!transport_budget(client,deadline)) { result=-3;goto done; }
     esp_err_t err = esp_http_client_open(client, (int)body_len);
     if (err != ESP_OK) { result = err == ESP_ERR_TIMEOUT ? -3 : -1; goto done; }
+    if(!transport_budget(client,deadline)) { result=-3;goto done; }
     if (body_len && esp_http_client_write(client, body, (int)body_len) != (int)body_len) goto done;
+    if(!transport_budget(client,deadline)) { result=-3;goto done; }
     int content_length = esp_http_client_fetch_headers(client);
     if (content_length < 0) goto done;
     *http_status = esp_http_client_get_status_code(client);
@@ -176,12 +193,14 @@ static int esp_transport(const char *method, const char *url, const char *token,
     if ((size_t)content_length > cap) { result = -2; goto done; }
     size_t used = 0;
     while (used < cap) {
+        if(!transport_budget(client,deadline)) { result=-3;goto done; }
         int n = esp_http_client_read(client, response + used, cap - used);
         if (n < 0) { result = -3; goto done; }
         if (n == 0) { *response_len = used; result = 0; goto done; }
         used += (size_t)n;
     }
     char extra;
+    if(!transport_budget(client,deadline)) { result=-3;goto done; }
     if (esp_http_client_read(client, &extra, 1) == 0) {
         *response_len = used; result = 0;
     } else result = -2;
@@ -207,7 +226,7 @@ static bool credentials_load(credentials_t *credentials) {
 static valve_client_result_t request(const char *method, const char *route,
                                      const char *body, size_t body_len,
                                      bool parse_status, valve_status_t *out,
-                                     const credentials_t *credentials) {
+                                     const credentials_t *credentials,const transport_deadline_t *deadline) {
     if (!out) return VALVE_CLIENT_INVALID;
     memset(out, 0, sizeof *out); out->state = VALVE_UNKNOWN;
 #ifndef VALVE_CLIENT_HOST_TEST
@@ -218,14 +237,16 @@ static valve_client_result_t request(const char *method, const char *route,
     char url[VALVE_CONFIG_URL_LEN + sizeof START_ROUTE];
     int n = snprintf(url, sizeof url, "%s%s", credentials->url, route);
     if (n < 0 || (size_t)n >= sizeof url) return VALVE_CLIENT_INVALID;
+    if(deadline && (monotonic_ms()<deadline->origin_ms || monotonic_ms()>=deadline->expires_ms))return VALVE_CLIENT_TIMEOUT;
     char response[RESPONSE_CAP]; size_t response_len = 0; int http_status = 0;
-#ifdef VALVE_CLIENT_HOST_TEST
+#if defined(VALVE_CLIENT_HOST_TEST) && !defined(VALVE_CLIENT_HTTP_HOST_TEST)
     int rc = s_transport ? s_transport(method, url, credentials->token, body, body_len, &http_status, response,
                                         sizeof response, &response_len, s_transport_context) : -1;
 #else
     int rc = esp_transport(method, url, credentials->token, body, body_len, &http_status, response,
-                           sizeof response, &response_len, NULL);
+                           sizeof response, &response_len, (void *)deadline);
 #endif
+    if(deadline && (monotonic_ms()<deadline->origin_ms || monotonic_ms()>=deadline->expires_ms))return VALVE_CLIENT_TIMEOUT;
     if (rc == -2 || response_len > sizeof response) return VALVE_CLIENT_INVALID;
     if (rc == -3) return VALVE_CLIENT_TIMEOUT;
     if (rc != 0) return VALVE_CLIENT_UNAVAILABLE;
@@ -269,11 +290,14 @@ static valve_client_result_t post_snapshot(const valve_request_t *action, valve_
                         action->action == VALVE_ACTION_WEATHER_STOP ? WEATHER_STOP_ROUTE : NULL;
     bool weather=action->action==VALVE_ACTION_WEATHER_START || action->action==VALVE_ACTION_WEATHER_STOP;
     uint64_t began=monotonic_ms();
+    uint64_t origin=work?work->enqueued_ms:began;
+    if(origin>UINT64_MAX-START_MAX_QUEUED_MS)return VALVE_CLIENT_TIMEOUT;
+    transport_deadline_t deadline={.origin_ms=origin,.expires_ms=origin+START_MAX_QUEUED_MS};
     if (weather) {
         valve_status_t preflight;
         if (action->action==VALVE_ACTION_WEATHER_START &&
             (action->duration_seconds<60 || action->duration_seconds>600 || action->duration_seconds%60)) return VALVE_CLIENT_INVALID;
-        valve_client_result_t check=request("GET",STATUS_ROUTE,NULL,0,true,&preflight,credentials);
+        valve_client_result_t check=request("GET",STATUS_ROUTE,NULL,0,true,&preflight,credentials,&deadline);
         if (check!=VALVE_CLIENT_OK) return check;
         if (!preflight.weather_assisted || preflight.weather_assistance_version!=1 ||
             preflight.operation==VALVE_FAULT || !preflight.control_revision_available ||
@@ -288,7 +312,7 @@ static valve_client_result_t post_snapshot(const valve_request_t *action, valve_
             snprintf(body+n,sizeof body-(size_t)n,"}");
         if (tail<0 || (size_t)tail>=sizeof body-(size_t)n || monotonic_ms()<began ||
             monotonic_ms()-began>=START_MAX_QUEUED_MS || start_expired(work)) return VALVE_CLIENT_TIMEOUT;
-        valve_client_result_t result=request("POST",route,body,(size_t)(n+tail),true,out,credentials);
+        valve_client_result_t result=request("POST",route,body,(size_t)(n+tail),true,out,credentials,&deadline);
         if (monotonic_ms()<began || monotonic_ms()-began>=START_MAX_QUEUED_MS || start_expired(work)) {
             memset(out,0,sizeof *out); return VALVE_CLIENT_TIMEOUT;
         }
@@ -301,7 +325,7 @@ static valve_client_result_t post_snapshot(const valve_request_t *action, valve_
             action->duration_seconds % 60) return VALVE_CLIENT_INVALID;
         valve_status_t preflight;
         valve_client_result_t check = request("GET", STATUS_ROUTE, NULL, 0, true,
-                                              &preflight, credentials);
+                                              &preflight, credentials,NULL);
         if (check != VALVE_CLIENT_OK) return check;
         if (preflight.state != VALVE_DRAIN || (work && !work_allowed(work)) ||
             credentials->generation != valve_config_generation()) return VALVE_CLIENT_INVALID;
@@ -314,15 +338,15 @@ static valve_client_result_t post_snapshot(const valve_request_t *action, valve_
         if (start_expired(work)) return VALVE_CLIENT_TIMEOUT;
     }
     valve_client_result_t result = request("POST", route, body_len ? body : NULL,
-                                           body_len, false, out, credentials);
+                                           body_len, false, out, credentials,NULL);
     if (result == VALVE_CLIENT_OK)
-        result = request("GET", STATUS_ROUTE, NULL, 0, true, out, credentials);
+        result = request("GET", STATUS_ROUTE, NULL, 0, true, out, credentials,NULL);
     return result;
 }
 valve_client_result_t valve_client_get_status(valve_status_t *out) {
     credentials_t credentials = {0};
     valve_client_result_t result = credentials_load(&credentials) ?
-        request("GET", STATUS_ROUTE, NULL, 0, true, out, &credentials) : VALVE_CLIENT_INVALID;
+        request("GET", STATUS_ROUTE, NULL, 0, true, out, &credentials,NULL) : VALVE_CLIENT_INVALID;
     memset(&credentials, 0, sizeof credentials);
     return result;
 }
@@ -351,7 +375,7 @@ static void dispatch(const work_item_t *work) {
         result = VALVE_CLIENT_TIMEOUT;
     } else {
         result = work->post ? post_snapshot(&work->request, &status, &credentials, work)
-            : request("GET", STATUS_ROUTE, NULL, 0, true, &status, &credentials);
+            : request("GET", STATUS_ROUTE, NULL, 0, true, &status, &credentials,NULL);
     }
     if (!work_allowed(work)) goto done;
     if (s_callback) {
@@ -364,7 +388,7 @@ static void dispatch(const work_item_t *work) {
     if (work->post && result != VALVE_CLIENT_OK &&
         session_snapshot(&current) && current == work->session) {
         valve_status_t reconciled;
-        valve_client_result_t check = request("GET", STATUS_ROUTE, NULL, 0, true, &reconciled, &credentials);
+        valve_client_result_t check = request("GET", STATUS_ROUTE, NULL, 0, true, &reconciled, &credentials,NULL);
         if (!work_allowed(work)) goto done;
         if (s_callback) {
             valve_client_event_t event = {.result = check, .status = reconciled,

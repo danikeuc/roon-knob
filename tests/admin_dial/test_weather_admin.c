@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 static unsigned puts_count, gets_count, generation, session=1;
+static bool alias_readback;
 static bool token_present=true, timeout_put, change_generation;
 static uint64_t saved_revision;
 static bool saved_enabled;
@@ -33,7 +34,11 @@ static int transport(const char *method,const char *url,const char *header,const
     if (change_generation) { generation+=2; change_generation=false; }
     int n=snprintf(out,capacity,"{\"revision\":%llu,\"enabled\":%s,\"latitude\":46.05,\"longitude\":14.5,\"timezone\":\"Europe/Ljubljana\"}",
         (unsigned long long)saved_revision,saved_enabled?"true":"false");
-    assert(n>0 && (size_t)n<capacity); *length=(size_t)n; return 0;
+    assert(n>0 && (size_t)n<capacity);
+    if(alias_readback) {
+        n=snprintf(out,capacity,"{\"revision\":2,\"enabled\\u0000unexpected\":true,\"latitude\":46.05,\"longitude\":14.5,\"timezone\":\"Europe/Ljubljana\"}");
+    }
+    *length=(size_t)n; return 0;
 }
 int main(void) {
     weather_admin_test_transport(transport,NULL);
@@ -53,7 +58,9 @@ int main(void) {
     assert(!weather_admin_get(&view) && gets_count==count);
     token_present=true; change_generation=true;
     assert(!weather_admin_get(&view));
+    alias_readback=true;assert(!weather_admin_get(&view) && view.result==WEATHER_ADMIN_INVALID);alias_readback=false;
     const char *bad[]={
+        "{\"expected_revision\":2,\"enabled\\u0000unexpected\":true,\"latitude\":46.05,\"longitude\":14.5,\"timezone\":\"Europe/Ljubljana\"}",
         "{\"expected_revision\":9007199254740992,\"enabled\":false,\"latitude\":null,\"longitude\":null,\"timezone\":\"UTC\"}",
         "{\"expected_revision\":1.0,\"enabled\":false,\"latitude\":null,\"longitude\":null,\"timezone\":\"UTC\"}",
         "{\"expected_revision\":1,\"enabled\":1,\"latitude\":null,\"longitude\":null,\"timezone\":\"UTC\"}",

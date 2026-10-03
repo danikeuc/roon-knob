@@ -403,6 +403,7 @@ void vTaskDelay(unsigned t) {
 void vTaskDelete(void*p) {
     (void)p;
 }
+#ifndef ADMIN_HTTP_RUNTIME_TEST
 int xTaskCreate(void(*f)(void*),const char*n,unsigned s,void*p,unsigned a,void*q) {
     (void)f;
     (void)n;
@@ -413,6 +414,7 @@ int xTaskCreate(void(*f)(void*),const char*n,unsigned s,void*p,unsigned a,void*q
     return 1;
 }
 
+#endif
 void admin_settings_cancel_pending(void) {}
 
 uint32_t valve_config_generation(void) { return 0; }

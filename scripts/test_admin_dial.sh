@@ -49,3 +49,6 @@ cc -std=c11 -Wall -Wextra -Werror -DWEATHER_ADMIN_HOST_TEST \
     tests/admin_dial/test_weather_admin.c idf_app/main/weather_admin_dial.c idf_app/main/valve_logic.c \
     "${IDF_PATH:-/tmp/esp-idf-5.5.5}/components/json/cJSON/cJSON.c" -lm -o "$tmp_dir/test_weather"
 "$tmp_dir/test_weather"
+
+# Exercise firmware queue ownership and actual ESP socket calls with host RTOS fakes.
+sh scripts/test_weather_runtime.sh worker

@@ -9,13 +9,31 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdatomic.h>
+#include <stdlib.h>
 #ifndef WEATHER_ADMIN_HOST_TEST
 #include "esp_http_client.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #endif
+#define WEATHER_REQUEST_MS UINT64_C(5000)
+typedef struct { uint64_t origin_ms,expires_ms; const atomic_bool *cancelled; } settings_deadline_t;
+static uint64_t settings_now_ms(void) {
+#ifdef WEATHER_ADMIN_HOST_TEST
+    return 0; /* Synchronous transport unit tests have no queued deadline. */
+#else
+    return (uint64_t)(esp_timer_get_time()/1000);
+#endif
+}
+static bool settings_expired(const settings_deadline_t *deadline) {
+    if(!deadline)return false;
+    uint64_t now=settings_now_ms();
+    return (deadline->cancelled && atomic_load(deadline->cancelled)) ||
+        now<deadline->origin_ms || now>=deadline->expires_ms;
+}
+static atomic_flag admission=ATOMIC_FLAG_INIT;
 static atomic_uint mutation_epoch;
 uint32_t weather_admin_generation(void) { return atomic_load(&mutation_epoch); }
 static bool timezone_valid(const char *value) {
@@ -42,6 +60,20 @@ static bool parse_settings(const char *text,size_t length,bool write,weather_set
         if (tokens[i].type==JSMN_STRING && memchr(text+tokens[i].start,'\\',(size_t)(tokens[i].end-tokens[i].start))) return false;
     }
     const char *revision_key=write?"expected_revision":"revision";
+    const char *keys[]={revision_key,"enabled","latitude","longitude","timezone"};
+    unsigned raw_seen=0;
+    for(int i=1;i<count;i+=2) {
+        if(tokens[i].type!=JSMN_STRING)return false;
+        unsigned bit=0;
+        for(unsigned key=0;key<5;++key) {
+            size_t key_length=strlen(keys[key]);
+            if((size_t)(tokens[i].end-tokens[i].start)==key_length &&
+                !memcmp(text+tokens[i].start,keys[key],key_length))bit=1u<<key;
+        }
+        if(!bit || (raw_seen&bit))return false;
+        raw_seen|=bit;
+    }
+    if(raw_seen!=31)return false;
     uint64_t revision=0; bool found=false;
     for (int i=1;i<count;i+=2) {
         if (tokens[i].type!=JSMN_STRING) return false;
@@ -107,9 +139,16 @@ static weather_admin_transport_fn transport;
 static void *transport_context;
 void weather_admin_test_transport(weather_admin_transport_fn fn,void *context) { transport=fn;transport_context=context; }
 #else
+static bool settings_transport_budget(esp_http_client_handle_t client,const settings_deadline_t *deadline) {
+    if(!deadline)return true;
+    if(settings_expired(deadline))return false;
+    uint64_t remaining=deadline->expires_ms-settings_now_ms();
+    if(!remaining || remaining>WEATHER_REQUEST_MS)return false;
+    return esp_http_client_set_timeout_ms(client,(int)(remaining<3000?remaining:3000))==ESP_OK;
+}
 static int transport(const char *method,const char *url,const char *header,const char *token,
     const char *body,size_t body_length,int *status,char *out,size_t capacity,size_t *length,void *context) {
-    (void)context;
+    const settings_deadline_t *deadline=context;
     esp_http_client_config_t config={.url=url,.method=!strcmp(method,"PUT")?HTTP_METHOD_PUT:HTTP_METHOD_GET,.timeout_ms=3000,.disable_auto_redirect=true};
     esp_http_client_handle_t client=esp_http_client_init(&config);
     if(!client)return -1;
@@ -117,14 +156,18 @@ static int transport(const char *method,const char *url,const char *header,const
     if(esp_http_client_set_header(client,header,token)!=ESP_OK ||
        esp_http_client_set_header(client,"Accept","application/json")!=ESP_OK ||
        (body_length && esp_http_client_set_header(client,"Content-Type","application/json")!=ESP_OK))goto done;
+    if(!settings_transport_budget(client,deadline)) { result=-3;goto done; }
     esp_err_t err=esp_http_client_open(client,(int)body_length);
     if(err!=ESP_OK) { result=err==ESP_ERR_TIMEOUT?-3:-1;goto done; }
+    if(!settings_transport_budget(client,deadline)) { result=-3;goto done; }
     if(body_length && esp_http_client_write(client,body,(int)body_length)!=(int)body_length) { result=-3;goto done; }
+    if(!settings_transport_budget(client,deadline)) { result=-3;goto done; }
     if(esp_http_client_fetch_headers(client)<0) { result=-3;goto done; }
     *status=esp_http_client_get_status_code(client);
     if(*status!=200) { result=0;goto done; }
     size_t used=0;
     while(used<capacity) {
+        if(!settings_transport_budget(client,deadline)) { result=-3;goto done; }
         int n=esp_http_client_read(client,out+used,capacity-used);
         if(n<0) { result=-3;goto done; }
         if(n==0) { *length=used;result=0;goto done; }
@@ -134,10 +177,10 @@ static int transport(const char *method,const char *url,const char *header,const
 done:
     esp_http_client_close(client);esp_http_client_cleanup(client);return result;
 }
-static void *transport_context;
 #endif
-static void perform(const weather_settings_write_t *write,weather_settings_view_t *out) {
+static void perform(const weather_settings_write_t *write,weather_settings_view_t *out,const settings_deadline_t *deadline) {
     memset(out,0,sizeof *out);out->result=WEATHER_ADMIN_UNAVAILABLE;
+    if(settings_expired(deadline)) {out->result=WEATHER_ADMIN_TIMEOUT;return;}
     unsigned generation=valve_config_generation(),session=valve_client_current_session();
     char base[VALVE_CONFIG_URL_LEN]={0},token[VALVE_CONFIG_TOKEN_LEN]={0};
     char url[VALVE_CONFIG_URL_LEN+64],body[384],response[512];size_t length=0;int status=0;
@@ -151,7 +194,14 @@ static void perform(const weather_settings_write_t *write,weather_settings_view_
 #endif
     if(write)atomic_fetch_add(&mutation_epoch,1);
     int rc=transport(write?"PUT":"GET",url,"X-Weather-Settings-Token",token,write?body:NULL,
-        write?strlen(body):0,&status,response,sizeof response,&length,transport_context);
+        write?strlen(body):0,&status,response,sizeof response,&length,
+#ifdef WEATHER_ADMIN_HOST_TEST
+        transport_context
+#else
+        (void *)deadline
+#endif
+    );
+    if(settings_expired(deadline)) {out->result=WEATHER_ADMIN_TIMEOUT;goto done;}
     if(generation!=valve_config_generation()||session!=valve_client_current_session())goto done;
     if(rc==-3) {out->result=WEATHER_ADMIN_TIMEOUT;goto done;}
     if(rc!=0 || length>sizeof response)goto done;
@@ -170,50 +220,78 @@ done:
     memset(token,0,sizeof token);memset(body,0,sizeof body);
 }
 #ifndef WEATHER_ADMIN_HOST_TEST
-/* Dedicated settings worker. This task has no relationship to playback/artwork
- * workers. HTTP callers retain their owned immutable request until completion. */
+/* Caller and worker own separate references. A stalled DNS/socket operation can
+ * outlive the finite HTTP wait without retaining stack pointers or server state. */
 static QueueHandle_t jobs;
-static SemaphoreHandle_t admission;
-typedef struct { bool write; weather_settings_write_t request; weather_settings_view_t result; SemaphoreHandle_t done; } job_t;
+typedef struct {
+    bool write;
+    weather_settings_write_t request;
+    weather_settings_view_t result;
+    SemaphoreHandle_t done;
+    atomic_uint references;
+    atomic_bool cancelled;
+    settings_deadline_t deadline;
+} job_t;
+static void job_release(job_t *job) {
+    if(atomic_fetch_sub(&job->references,1)==1) {
+        vSemaphoreDelete(job->done);free(job);
+    }
+}
 static void worker(void *context) {
     (void)context;job_t *job;
     for(;;)if(xQueueReceive(jobs,&job,portMAX_DELAY)==pdTRUE) {
-        perform(job->write?&job->request:NULL,&job->result);xSemaphoreGive(job->done);
+        perform(job->write?&job->request:NULL,&job->result,&job->deadline);
+        if(settings_expired(&job->deadline)) {
+            memset(&job->result,0,sizeof job->result);job->result.result=WEATHER_ADMIN_TIMEOUT;
+        }
+        xSemaphoreGive(job->done);
+        atomic_flag_clear(&admission);
+        job_release(job);
     }
 }
 bool weather_admin_init(void) {
     if(jobs)return true;
-    admission=xSemaphoreCreateMutex();jobs=xQueueCreate(1,sizeof(job_t *));
-    if(!admission||!jobs || xTaskCreate(worker,"weather_settings",8192,NULL,3,NULL)!=pdPASS) {
+    jobs=xQueueCreate(1,sizeof(job_t *));
+    if(!jobs || xTaskCreate(worker,"weather_settings",8192,NULL,3,NULL)!=pdPASS) {
         if(jobs)vQueueDelete(jobs);
-        if(admission)vSemaphoreDelete(admission);
-        jobs=NULL;admission=NULL;return false;
+        jobs=NULL;return false;
     }
     return true;
 }
 #else
 bool weather_admin_init(void) { return true; }
-static atomic_flag admission=ATOMIC_FLAG_INIT;
 #endif
 static bool execute(const weather_settings_write_t *write,weather_settings_view_t *out) {
     if(!out)return false;
     memset(out,0,sizeof *out);out->result=WEATHER_ADMIN_UNAVAILABLE;
-#ifdef WEATHER_ADMIN_HOST_TEST
     if(atomic_flag_test_and_set(&admission))return false;
-    perform(write,out);atomic_flag_clear(&admission);
+#ifdef WEATHER_ADMIN_HOST_TEST
+    perform(write,out,NULL);atomic_flag_clear(&admission);
 #else
-    if(!jobs || xSemaphoreTake(admission,0)!=pdTRUE)return false;
-    job_t job={.write=write!=NULL};if(write)job.request=*write;
-    job.done=xSemaphoreCreateBinary();job_t *pointer=&job;
-    if(job.done && xQueueSend(jobs,&pointer,0)==pdTRUE) {
-        /* Transport is bounded. Never abandon a queued stack-owned request. */
-        xSemaphoreTake(job.done,portMAX_DELAY);*out=job.result;
+    uint64_t origin=settings_now_ms();
+    job_t *job=jobs && origin<=UINT64_MAX-WEATHER_REQUEST_MS ? calloc(1,sizeof *job):NULL;
+    if(!job) {atomic_flag_clear(&admission);return false;}
+    job->write=write!=NULL;if(write)job->request=*write;
+    job->done=xSemaphoreCreateBinary();
+    atomic_init(&job->references,2);atomic_init(&job->cancelled,false);
+    job->deadline=(settings_deadline_t){.origin_ms=origin,.expires_ms=origin+WEATHER_REQUEST_MS,.cancelled=&job->cancelled};
+    if(!job->done || xQueueSend(jobs,&job,0)!=pdTRUE) {
+        if(job->done)vSemaphoreDelete(job->done);
+        free(job);atomic_flag_clear(&admission);return false;
     }
-    if(job.done)vSemaphoreDelete(job.done);
-    xSemaphoreGive(admission);
+    uint64_t now=settings_now_ms();
+    uint64_t remaining=now>=origin && now<job->deadline.expires_ms?job->deadline.expires_ms-now:0;
+    TickType_t wait=pdMS_TO_TICKS(remaining);
+    bool completed=remaining && xSemaphoreTake(job->done,wait)==pdTRUE;
+    if(completed && !settings_expired(&job->deadline))*out=job->result;
+    else {atomic_store(&job->cancelled,true);out->result=WEATHER_ADMIN_TIMEOUT;}
+    /* Admission remains occupied until the worker finishes, bounding orphaned
+     * work at one job even if DNS never returns. Other admin routes stay free. */
+    job_release(job);
 #endif
     return out->result==WEATHER_ADMIN_OK;
 }
+
 bool weather_admin_get(weather_settings_view_t *out) { return execute(NULL,out); }
 bool weather_admin_update(const weather_settings_write_t *request,weather_settings_view_t *out) {
     return request && execute(request,out);

@@ -103,3 +103,6 @@ assert trigger.index('#if defined(ESP_PLATFORM) && !defined(RK_CUSTOM_VALVE_FIRM
 PY_GATE
 
 python3 tests/valve_dial/test_settings_gesture.py
+
+# Check the production body-transmission deadline after connection.
+sh scripts/test_weather_runtime.sh action

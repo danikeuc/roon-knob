@@ -476,8 +476,8 @@ static void test_weather_proxy_protected_and_exact(void) {
     fixture_call(&r);assert(fixture_status(&r)==503 && weather_puts==3);
     weather_timeout=false;r=fixture_request("/admin/api/weather",HTTP_GET,NULL);r.cookie=cookie;
     fixture_call(&r);assert(fixture_status(&r)==200 && weather_puts==3 && strstr(r.response,"\"revision\":2"));
-    const char *bad[]={"{}","{\"expected_revision\":2,\"enabled\":false,\"latitude\":null,\"longitude\":null,\"timezone\":\"UTC\",\"token\":\"private\"}"};
-    for(unsigned i=0;i<2;++i) {r=fixture_request("/admin/api/weather",HTTP_PUT,bad[i]);r.cookie=cookie;r.csrf=csrf;
+    const char *bad[]={"{\"expected_revision\":2,\"enabled\\u0000unexpected\":true,\"latitude\":46.05,\"longitude\":14.5,\"timezone\":\"Europe/Ljubljana\"}","{}","{\"expected_revision\":2,\"enabled\":false,\"latitude\":null,\"longitude\":null,\"timezone\":\"UTC\",\"token\":\"private\"}"};
+    for(unsigned i=0;i<3;++i) {r=fixture_request("/admin/api/weather",HTTP_PUT,bad[i]);r.cookie=cookie;r.csrf=csrf;
         fixture_call(&r);assert(fixture_status(&r)==422 && weather_puts==3);}
     weather_missing=true;r=fixture_request("/admin/api/weather",HTTP_GET,NULL);r.cookie=cookie;
     fixture_call(&r);assert(fixture_status(&r)==503 && !strstr(r.response,"private"));weather_missing=false;
