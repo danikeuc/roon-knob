@@ -7,6 +7,7 @@
 #include "freertos/task.h"
 #include "controller_config.h"
 #include "nvs.h"
+#include "playlist_client_dial.h"
 #include <assert.h>
 #include <pthread.h>
 #include <stdlib.h>
@@ -18,7 +19,13 @@ atomic_uint fixture_body_writes,fixture_cleanups,fixture_last_timeout;
 uint64_t fixture_action_now;
 static atomic_uint released_jobs;
 static fixture_http_case_t scenario;
+static atomic_bool changed_zone;
 static uint64_t clock_origin;
+static atomic_bool copy_window,publisher_attempt;
+static bool preempt_reader;
+static QueueHandle_t mailbox;
+void runtime_arm_mailbox_preemption(void){assert(mailbox);preempt_reader=true;atomic_store(&publisher_attempt,false);}
+void runtime_assert_mailbox_preemption(void){assert(atomic_load(&publisher_attempt));}
 uint64_t runtime_wall_ms(void) {
     struct timespec time;clock_gettime(CLOCK_MONOTONIC,&time);
     return (uint64_t)time.tv_sec*1000+(uint64_t)time.tv_nsec/1000000;
@@ -27,7 +34,7 @@ static void pause_ms(unsigned milliseconds) {
     struct timespec time={.tv_sec=milliseconds/1000,.tv_nsec=(long)(milliseconds%1000)*1000000};nanosleep(&time,NULL);
 }
 void runtime_http_case(fixture_http_case_t value) {
-    scenario=value;clock_origin=runtime_wall_ms();atomic_store(&fixture_body_writes,0);atomic_store(&fixture_cleanups,0);atomic_store(&released_jobs,0);
+    scenario=value;atomic_store(&changed_zone,false);clock_origin=runtime_wall_ms();atomic_store(&fixture_body_writes,0);atomic_store(&fixture_cleanups,0);atomic_store(&released_jobs,0);
 }
 int64_t esp_timer_get_time(void) { return (int64_t)(runtime_wall_ms()-clock_origin)*100*1000; }
 void runtime_wait_cleanup(unsigned count) {
@@ -57,7 +64,7 @@ esp_err_t esp_http_client_set_timeout_ms(esp_http_client_handle_t client,int val
 }
 esp_err_t esp_http_client_open(esp_http_client_handle_t client,int length) {
     (void)length;
-    if(scenario==HTTP_ACTION_EXPIRED_OPEN)fixture_action_now+=client->method==HTTP_METHOD_GET?500:2000;
+    if(scenario==HTTP_ACTION_EXPIRED_OPEN&&client->method==HTTP_METHOD_POST)atomic_store(&changed_zone,true);
     if(scenario==HTTP_WEATHER_STALLED_OPEN)pause_ms(300); /* DNS ignores socket timeout. */
     return ESP_OK;
 }
@@ -83,6 +90,7 @@ esp_err_t esp_http_client_cleanup(esp_http_client_handle_t client) { free(client
 struct fake_queue { pthread_mutex_t lock;pthread_cond_t changed;unsigned capacity,count,head;size_t item_size;unsigned char *data; };
 QueueHandle_t xQueueCreate(unsigned capacity,size_t size) {
     struct fake_queue *queue=calloc(1,sizeof *queue);assert(queue);pthread_mutex_init(&queue->lock,NULL);pthread_cond_init(&queue->changed,NULL);
+    if(size>sizeof(void *)){assert(!mailbox);mailbox=queue;}
     queue->capacity=capacity;queue->item_size=size;queue->data=calloc(capacity,size);assert(queue->data);return queue;
 }
 int xQueueSend(QueueHandle_t queue,const void *item,unsigned wait) {
@@ -92,11 +100,28 @@ int xQueueSend(QueueHandle_t queue,const void *item,unsigned wait) {
     ++queue->count;pthread_cond_signal(&queue->changed);pthread_mutex_unlock(&queue->lock);return pdTRUE;
 }
 int xQueueReceive(QueueHandle_t queue,void *item,unsigned wait) {
-    assert(wait==portMAX_DELAY);pthread_mutex_lock(&queue->lock);
+    assert(wait==portMAX_DELAY||wait==0);pthread_mutex_lock(&queue->lock);
+    if(!queue->count&&!wait){pthread_mutex_unlock(&queue->lock);return pdFALSE;}
     while(!queue->count)pthread_cond_wait(&queue->changed,&queue->lock);
-    memcpy(item,queue->data+queue->head*queue->item_size,queue->item_size);queue->head=(queue->head+1)%queue->capacity;
+    if(queue==mailbox&&preempt_reader){
+        /* Suspend the lower-priority receiver inside its kernel-owned copy.
+         * The actual production worker reaches overwrite during that window;
+         * it must wait in the RTOS primitive, leaving the owner able to resume. */
+        preempt_reader=false;atomic_store(&copy_window,true);
+        size_t half=queue->item_size/2;memcpy(item,queue->data+queue->head*queue->item_size,half);
+        assert(playlist_client_request_favorites());uint64_t deadline=runtime_wall_ms()+200;
+        while(!atomic_load(&publisher_attempt)&&runtime_wall_ms()<deadline)pause_ms(1);
+        assert(atomic_load(&publisher_attempt));
+        memcpy((char *)item+half,queue->data+queue->head*queue->item_size+half,queue->item_size-half);
+        atomic_store(&copy_window,false);
+    }else memcpy(item,queue->data+queue->head*queue->item_size,queue->item_size);
+    queue->head=(queue->head+1)%queue->capacity;
     --queue->count;pthread_mutex_unlock(&queue->lock);return pdTRUE;
 }
+int xQueueOverwrite(QueueHandle_t queue,const void *item){
+    assert(queue->capacity==1);if(queue==mailbox&&atomic_load(&copy_window))atomic_store(&publisher_attempt,true);pthread_mutex_lock(&queue->lock);memcpy(queue->data,item,queue->item_size);queue->head=0;queue->count=1;pthread_cond_signal(&queue->changed);pthread_mutex_unlock(&queue->lock);return pdTRUE;
+}
+int xQueueReset(QueueHandle_t queue){pthread_mutex_lock(&queue->lock);queue->head=queue->count=0;pthread_mutex_unlock(&queue->lock);return pdTRUE;}
 void vQueueDelete(QueueHandle_t queue){free(queue->data);free(queue);}
 struct fake_semaphore { pthread_mutex_t lock;pthread_cond_t changed;unsigned available; };
 SemaphoreHandle_t xSemaphoreCreateBinary(void) {
@@ -122,7 +147,7 @@ void vSemaphoreDelete(SemaphoreHandle_t semaphore) { pthread_mutex_destroy(&sema
 struct launch {void (*fn)(void *);void *context;};
 static void *thread_start(void *context) {struct launch job=*(struct launch *)context;free(context);job.fn(job.context);return NULL;}
 int xTaskCreate(void (*fn)(void *),const char *name,unsigned stack,void *context,unsigned priority,void *handle) {
-    (void)name;(void)stack;(void)priority;(void)handle;
+    (void)handle;assert(!strcmp(name,"playlist")&&stack==12288&&priority==3);
     struct launch *launch=malloc(sizeof *launch);assert(launch);*launch=(struct launch){fn,context};
     pthread_t thread;assert(!pthread_create(&thread,NULL,thread_start,launch));pthread_detach(thread);return pdPASS;
 }
@@ -130,7 +155,7 @@ int xTaskCreate(void (*fn)(void *),const char *name,unsigned stack,void *context
 bool esp_http_client_is_complete_data_received(esp_http_client_handle_t c){return c->offset==strlen(c->response);}
 bool controller_config_snapshot(controller_config_snapshot_t *out){memset(out,0,sizeof *out);strcpy(out->value.bridge_base,"http://bridge/roon");return true;}
 bool controller_config_capture_endpoint_token(controller_config_endpoint_token_t *out){*out=(controller_config_endpoint_token_t){.generation=1};strcpy(out->bridge_base,"http://bridge/roon");return true;}
-bool bridge_client_get_current_zone_id(char *out,size_t capacity){assert(capacity>=6);strcpy(out,"sauna");return true;}
+bool bridge_client_get_current_zone_id(char *out,size_t capacity){assert(capacity>=6);strcpy(out,atomic_load(&changed_zone)?"other-zone":"sauna");return true;}
 void esp_fill_random(void *out,size_t length){memset(out,1,length);}
 static char private_blob[260];
 esp_err_t nvs_open(const char *name,int mode,nvs_handle_t *out){(void)mode;assert(!strcmp(name,"playlist_private"));*out=1;return ESP_OK;}

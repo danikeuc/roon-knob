@@ -18,11 +18,19 @@
 #include "freertos/task.h"
 #endif
 #define ADMIN_MS UINT64_C(5000)
-static atomic_flag admission=ATOMIC_FLAG_INIT,result_lock=ATOMIC_FLAG_INIT;
+static atomic_flag admission=ATOMIC_FLAG_INIT;
 static atomic_uint ui_generation=1,session_generation=1;
 static atomic_bool online;
-static playlist_client_result_t result_slot;
+typedef struct { playlist_client_result_t result;playlist_endpoint_t binding; } result_message_t;
+/* Only the UI actor owns the displayed-choice proof. Connectivity invalidates it
+ * through the atomic generation; the worker communicates through an RTOS queue. */
+static struct { bool valid;uint32_t generation;playlist_endpoint_t endpoint;playlist_favorites_t favorites; } picker_proof;
+#ifdef PLAYLIST_HOST_TEST
+static result_message_t result_slot;
 static bool has_result;
+#else
+static QueueHandle_t results;
+#endif
 static struct { bool active;char id[37],zone[129];uint64_t start,poll;uint32_t generation; } pending;
 #ifdef PLAYLIST_HOST_TEST
 static uint64_t (*clock_hook)(void);
@@ -67,17 +75,24 @@ static void release(job_t *job){if(atomic_fetch_sub(&job->references,1)==1){
  if(job->done)vSemaphoreDelete(job->done);
 #endif
  free(job->body);free(job->reply);memset(job->endpoint.token,0,sizeof job->endpoint.token);free(job);}}
+static bool same_endpoint(const playlist_endpoint_t *a,const playlist_endpoint_t *b){
+ return a->generation==b->generation&&a->session==b->session&&a->credential_generation==b->credential_generation&&!strcmp(a->base,b->base)&&!strcmp(a->zone,b->zone);
+}
 static bool valid(void *context) {
  job_t *j=context;uint64_t now=now_ms();playlist_endpoint_t current;
  if(atomic_load(&j->cancelled)||!atomic_load(&online)||now<j->origin||now>=j->deadline||!snapshot(&current))return false;
- return (j->kind==JOB_ADMIN||j->generation==atomic_load(&ui_generation))&&current.generation==j->endpoint.generation&&current.session==j->endpoint.session&&current.credential_generation==j->endpoint.credential_generation&&!strcmp(current.base,j->endpoint.base)&&!strcmp(current.zone,j->endpoint.zone);
+ return (j->kind==JOB_ADMIN||j->generation==atomic_load(&ui_generation))&&same_endpoint(&current,&j->endpoint);
 }
 static void publish(job_t *j,playlist_client_status_t status,const playlist_favorites_t *favorites){
  if(j->generation!=atomic_load(&ui_generation))return;
- while(atomic_flag_test_and_set(&result_lock)){}
- result_slot=(playlist_client_result_t){.status=status,.generation=j->generation};
- if(favorites){result_slot.favorites=*favorites;}
- strcpy(result_slot.request_id,j->request_id);strcpy(result_slot.zone,j->endpoint.zone);has_result=true;atomic_flag_clear(&result_lock);
+ result_message_t message={.result={.status=status,.generation=j->generation},.binding=j->endpoint};
+ if(favorites)message.result.favorites=*favorites;
+ strcpy(message.result.request_id,j->request_id);strcpy(message.result.zone,j->endpoint.zone);
+#ifdef PLAYLIST_HOST_TEST
+ result_slot=message;has_result=true;
+#else
+ if(results)xQueueOverwrite(results,&message);
+#endif
 }
 #ifndef PLAYLIST_HOST_TEST
 static bool budget(esp_http_client_handle_t client,const playlist_http_request_t *r){if(!r->valid(r->context))return false;uint64_t now=now_ms();if(now>=r->deadline_ms)return false;uint64_t left=r->deadline_ms-now;return esp_http_client_set_timeout_ms(client,(int)(left<3000?left:3000))==ESP_OK;}
@@ -157,12 +172,20 @@ static void worker(void *unused){(void)unused;job_t *j;for(;;)if(xQueueReceive(j
 bool playlist_client_init(void){
 #ifndef PLAYLIST_HOST_TEST
  if(jobs)return true;
- jobs=xQueueCreate(1,sizeof(job_t *));if(!jobs||xTaskCreate(worker,"playlist",12288,NULL,3,NULL)!=pdPASS){if(jobs)vQueueDelete(jobs);jobs=NULL;return false;}
+ results=xQueueCreate(1,sizeof(result_message_t));jobs=xQueueCreate(1,sizeof(job_t *));
+ if(!results||!jobs||xTaskCreate(worker,"playlist",12288,NULL,3,NULL)!=pdPASS){if(jobs)vQueueDelete(jobs);if(results)vQueueDelete(results);jobs=NULL;results=NULL;return false;}
 #endif
  return true;
 }
 void playlist_client_connected(bool connected){atomic_store(&online,connected);atomic_fetch_add(&session_generation,1);atomic_fetch_add(&ui_generation,1);}
-void playlist_client_cancel(void){atomic_fetch_add(&ui_generation,1);pending.active=false;while(atomic_flag_test_and_set(&result_lock)){}has_result=false;atomic_flag_clear(&result_lock);}
+void playlist_client_cancel(void){
+ atomic_fetch_add(&ui_generation,1);pending.active=false;picker_proof.valid=false;
+#ifdef PLAYLIST_HOST_TEST
+ has_result=false;
+#else
+ if(results)xQueueReset(results);
+#endif
+}
 static job_t *new_job(job_kind_t kind,uint64_t age){
  if(!atomic_load(&online)||atomic_flag_test_and_set(&admission))return NULL;
  uint64_t now=now_ms();job_t *j=now<=UINT64_MAX-age?calloc(1,sizeof *j):NULL;
@@ -177,12 +200,31 @@ static bool enqueue(job_t *j){
  atomic_flag_clear(&admission);release(j);return false;
 #endif
 }
-bool playlist_client_request_favorites(void){job_t *j=new_job(JOB_FAVORITES,ADMIN_MS);return j&&enqueue(j);}
+bool playlist_client_request_favorites(void){picker_proof.valid=false;job_t *j=new_job(JOB_FAVORITES,ADMIN_MS);return j&&enqueue(j);}
 bool playlist_client_request_play(const char *id,uint64_t revision,uint64_t epoch){
  if(!id||!*id||strlen(id)>128||revision>PLAYLIST_NUMBER_MAX||epoch>PLAYLIST_NUMBER_MAX)return false;
- job_t *j=new_job(JOB_PLAY,PLAYLIST_UNSENT_MS);if(!j)return false;strcpy(j->favorite_id,id);j->revision=revision;j->core_epoch=epoch;uuid(j->request_id);return enqueue(j);
+ if(!picker_proof.valid||picker_proof.generation!=atomic_load(&ui_generation)||revision!=picker_proof.favorites.revision||epoch!=picker_proof.favorites.core_epoch)return false;
+ bool offered=false;for(unsigned i=0;i<picker_proof.favorites.count;i++)if(picker_proof.favorites.entries[i].available&&!strcmp(id,picker_proof.favorites.entries[i].id))offered=true;
+ if(!offered)return false;
+ job_t *j=new_job(JOB_PLAY,PLAYLIST_UNSENT_MS);if(!j)return false;
+ if(!same_endpoint(&j->endpoint,&picker_proof.endpoint)){atomic_flag_clear(&admission);release(j);return false;}
+ j->endpoint=picker_proof.endpoint;strcpy(j->favorite_id,id);j->revision=revision;j->core_epoch=epoch;uuid(j->request_id);return enqueue(j);
 }
-bool playlist_client_take(playlist_client_result_t *out){if(!out||atomic_flag_test_and_set(&result_lock))return false;bool yes=has_result&&result_slot.generation==atomic_load(&ui_generation);if(yes)*out=result_slot;has_result=false;atomic_flag_clear(&result_lock);if(yes&&out->status==PLAYLIST_CLIENT_ACCEPTED){if(!pending.active){pending.start=now_ms();pending.poll=pending.start;pending.generation=out->generation;strcpy(pending.id,out->request_id);strcpy(pending.zone,out->zone);}pending.active=true;}else if(yes)pending.active=false;return yes;}
+bool playlist_client_take(playlist_client_result_t *out){
+ if(!out)return false;
+ result_message_t message;
+#ifdef PLAYLIST_HOST_TEST
+ if(!has_result)return false;
+ message=result_slot;has_result=false;
+#else
+ if(!results||xQueueReceive(results,&message,0)!=pdTRUE)return false;
+#endif
+ if(message.result.generation!=atomic_load(&ui_generation))return false;
+ *out=message.result;
+ if(out->status==PLAYLIST_CLIENT_FAVORITES){picker_proof.valid=true;picker_proof.generation=out->generation;picker_proof.endpoint=message.binding;picker_proof.favorites=out->favorites;}
+ if(out->status==PLAYLIST_CLIENT_ACCEPTED){if(!pending.active){pending.start=now_ms();pending.poll=pending.start;pending.generation=out->generation;strcpy(pending.id,out->request_id);strcpy(pending.zone,out->zone);}pending.active=true;}else pending.active=false;
+ return true;
+}
 void playlist_client_process(void){
  if(!pending.active)return;
  uint64_t now=now_ms();

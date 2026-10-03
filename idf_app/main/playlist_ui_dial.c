@@ -49,6 +49,8 @@ bool playlist_ui_touch(int x,int y,bool pressed,bool moved,uint64_t now){
   bool tap=new_press&&!movement&&!moved&&now>=press_ms&&now-press_ms<500;new_press=false;
   if(!tap)return true;
   if(state.phase==PLAYLIST_ERROR){playlist_ui_cancel();return true;}
+  char zone[129];
+  if(!playlist_ui_context_allowed()||!playlist_ui_current_zone(zone,sizeof zone)||strcmp(zone,state.favorites.zone_id)){playlist_client_cancel();show_error("Območje se je spremenilo. Brez predvajanja.",now);return true;}
   playlist_action_t a=controller_playlist_confirm(&state,now);
   if(a.kind==PLAYLIST_ACTION_CANCEL){playlist_ui_cancel();return true;}
   if(a.kind==PLAYLIST_ACTION_PREPARE_PLAY){if(!playlist_client_request_play(a.favorite_id,a.revision,a.core_epoch))show_error("Ni na voljo. Poskusite znova z novim tapom.",now);else{strcpy(message,"Pripravljam predvajanje …");playlist_ui_render(&state,message);}}

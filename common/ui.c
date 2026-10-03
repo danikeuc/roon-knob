@@ -137,10 +137,12 @@ static ui_jpeg_image_t s_artwork_img;  // Decoded RGB565 image for artwork (ESP3
 #include "freertos/task.h"
 #include <stdatomic.h>
 typedef struct { char url[512],key[128],zone[129];uint32_t generation,endpoint_generation; } artwork_request_t;
-static QueueHandle_t artwork_jobs;
+typedef struct { artwork_request_t request;char *pixels; } artwork_result_t;
+static QueueHandle_t artwork_jobs,artwork_results;
 static atomic_uint artwork_generation;
-static atomic_flag artwork_lock=ATOMIC_FLAG_INIT;
-static struct { bool ready;artwork_request_t request;char *pixels; } artwork_result;
+/* Admission, retry and displayed identities belong only to the UI actor. */
+static struct { bool active;unsigned failures;uint64_t retry_at;artwork_request_t request; } artwork_pending;
+static struct { bool valid;uint32_t endpoint_generation;char zone[129]; } artwork_displayed;
 static char artwork_requested[128];
 static bool artwork_current(void *context) {
     artwork_request_t *r=context;controller_config_endpoint_token_t endpoint;char zone[129];
@@ -149,13 +151,19 @@ static bool artwork_current(void *context) {
 static void artwork_worker(void *unused) {
     (void)unused;artwork_request_t request;
     for(;;)if(xQueueReceive(artwork_jobs,&request,portMAX_DELAY)==pdTRUE){
-        while(atomic_flag_test_and_set(&artwork_lock)){}char *previous=artwork_result.pixels;artwork_result.pixels=NULL;artwork_result.ready=false;atomic_flag_clear(&artwork_lock);free(previous);
+        artwork_result_t result;
+        if(xQueueReceive(artwork_results,&result,0)==pdTRUE)free(result.pixels);
         char *pixels=NULL;size_t length=0;
-        if(platform_http_get_dial_artwork(request.url,&pixels,&length,artwork_current,&request)!=0||!artwork_current(&request)){free(pixels);continue;}
-        while(atomic_flag_test_and_set(&artwork_lock)){}artwork_result.request=request;artwork_result.pixels=pixels;artwork_result.ready=true;atomic_flag_clear(&artwork_lock);
+        if(platform_http_get_dial_artwork(request.url,&pixels,&length,artwork_current,&request)!=0||!artwork_current(&request)){free(pixels);pixels=NULL;}
+        /* The sole producer removed the previous result before fetching. Kernel
+         * queue ownership lets the lower-priority UI run without a busy spin. */
+        result.request=request;result.pixels=pixels;xQueueOverwrite(artwork_results,&result);
     }
 }
-static void artwork_init(void){artwork_jobs=xQueueCreate(1,sizeof(artwork_request_t));if(!artwork_jobs||xTaskCreate(artwork_worker,"dial_artwork",4096,NULL,2,NULL)!=pdPASS){if(artwork_jobs)vQueueDelete(artwork_jobs);artwork_jobs=NULL;}}
+static void artwork_init(void){
+    artwork_jobs=xQueueCreate(1,sizeof(artwork_request_t));artwork_results=xQueueCreate(1,sizeof(artwork_result_t));
+    if(!artwork_jobs||!artwork_results||xTaskCreate(artwork_worker,"dial_artwork",4096,NULL,2,NULL)!=pdPASS){if(artwork_jobs)vQueueDelete(artwork_jobs);if(artwork_results)vQueueDelete(artwork_results);artwork_jobs=NULL;artwork_results=NULL;}
+}
 #endif
 
 #else
@@ -1256,11 +1264,17 @@ void ui_test_pattern(void) {
 
 void ui_set_artwork(const char *image_key) {
 #if defined(RK_CUSTOM_VALVE_FIRMWARE) && RK_CUSTOM_VALVE_FIRMWARE
-    if(!image_key||!*image_key){atomic_fetch_add(&artwork_generation,1);artwork_requested[0]=0;s_last_image_key[0]=0;if(s_artwork_image)lv_obj_add_flag(s_artwork_image,LV_OBJ_FLAG_HIDDEN);return;}
-    if(strlen(image_key)>=sizeof artwork_requested||!artwork_jobs||!strcmp(image_key,artwork_requested))return;
+    if(!image_key||!*image_key){atomic_fetch_add(&artwork_generation,1);memset(&artwork_pending,0,sizeof artwork_pending);artwork_displayed.valid=false;artwork_requested[0]=0;s_last_image_key[0]=0;if(s_artwork_image)lv_obj_add_flag(s_artwork_image,LV_OBJ_FLAG_HIDDEN);return;}
+    if(strlen(image_key)>=sizeof artwork_requested||!artwork_jobs)return;
     artwork_request_t request={0};controller_config_endpoint_token_t endpoint;
     if(!controller_config_capture_endpoint_token(&endpoint)||!bridge_client_get_current_zone_id(request.zone,sizeof request.zone)||!bridge_client_get_artwork_url(request.url,sizeof request.url,360,360))return;
-    request.generation=atomic_fetch_add(&artwork_generation,1)+1;request.endpoint_generation=endpoint.generation;strcpy(request.key,image_key);strcpy(artwork_requested,image_key);
+    request.endpoint_generation=endpoint.generation;strcpy(request.key,image_key);
+    bool same=!strcmp(image_key,artwork_requested)&&request.endpoint_generation==artwork_pending.request.endpoint_generation&&!strcmp(request.zone,artwork_pending.request.zone);
+    if(same&&(artwork_pending.active||(artwork_pending.retry_at&&platform_millis()<artwork_pending.retry_at)))return;
+    if(artwork_displayed.valid&&!strcmp(image_key,s_last_image_key)&&request.endpoint_generation==artwork_displayed.endpoint_generation&&!strcmp(request.zone,artwork_displayed.zone))return;
+    if(!same)artwork_pending.failures=0;
+    request.generation=atomic_fetch_add(&artwork_generation,1)+1;artwork_pending.active=true;artwork_pending.retry_at=0;artwork_pending.request=request;strcpy(artwork_requested,image_key);
+    artwork_displayed.valid=false;if(s_artwork_image)lv_obj_add_flag(s_artwork_image,LV_OBJ_FLAG_HIDDEN);
     xQueueOverwrite(artwork_jobs,&request);return;
 #endif
     // Check if image_key changed
@@ -1567,12 +1581,23 @@ bool ui_playlist_touch_allowed(int x,int y) {
 
 void ui_artwork_process(void) {
 #if defined(RK_CUSTOM_VALVE_FIRMWARE) && RK_CUSTOM_VALVE_FIRMWARE
-    if(atomic_flag_test_and_set(&artwork_lock))return;
-    bool ready=artwork_result.ready;artwork_request_t request=artwork_result.request;char *pixels=artwork_result.pixels;
-    artwork_result.ready=false;artwork_result.pixels=NULL;atomic_flag_clear(&artwork_lock);
-    if(ready&&pixels&&artwork_current(&request)&&ui_rgb565_from_buffer((const uint8_t *)pixels,360,360,&s_artwork_img)){
-        lv_image_set_src(s_artwork_image,&s_artwork_img.dsc);lv_obj_clear_flag(s_artwork_image,LV_OBJ_FLAG_HIDDEN);lv_obj_set_size(s_artwork_image,360,360);lv_obj_center(s_artwork_image);lv_obj_invalidate(s_artwork_image);strcpy(s_last_image_key,request.key);
+    artwork_result_t result;
+    if(artwork_results&&xQueueReceive(artwork_results,&result,0)==pdTRUE){
+        artwork_request_t *request=&result.request;
+        if(artwork_pending.active&&request->generation==artwork_pending.request.generation&&request->generation==atomic_load(&artwork_generation)){
+            artwork_pending.active=false;
+            if(result.pixels&&artwork_current(request)&&ui_rgb565_from_buffer((const uint8_t *)result.pixels,360,360,&s_artwork_img)){
+                lv_image_set_src(s_artwork_image,&s_artwork_img.dsc);lv_obj_clear_flag(s_artwork_image,LV_OBJ_FLAG_HIDDEN);lv_obj_set_size(s_artwork_image,360,360);lv_obj_center(s_artwork_image);lv_obj_invalidate(s_artwork_image);strcpy(s_last_image_key,request->key);
+                artwork_displayed.valid=true;artwork_displayed.endpoint_generation=request->endpoint_generation;strcpy(artwork_displayed.zone,request->zone);artwork_pending.failures=0;artwork_pending.retry_at=0;
+            }else{
+                uint64_t now=platform_millis();artwork_pending.failures++;
+                if(artwork_pending.failures<3&&now<=UINT64_MAX-5000)artwork_pending.retry_at=now+5000;
+            }
+        }
+        free(result.pixels);
     }
-    free(pixels);
+    if(!artwork_pending.active&&artwork_pending.retry_at&&platform_millis()>=artwork_pending.retry_at){
+        char key[128];strcpy(key,artwork_requested);ui_set_artwork(key);
+    }
 #endif
 }
