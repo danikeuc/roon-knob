@@ -37,5 +37,9 @@ int main(void) {
     assert(strstr(request.response,"\"revision\":1")&&strstr(request.response,"\"observation\":null"));
     assert(!weather_admin_get(&view)); /* No second worker while optional GET stalls. */
     runtime_wait_counts(2,1);assert(atomic_load(&fixture_body_writes)==0);
+    runtime_http_case(HTTP_OBSERVATION_MALFORMED);
+    request=fixture_request("/admin/api/weather",HTTP_GET,NULL);request.cookie=cookie;fixture_call(&request);
+    assert(fixture_status(&request)==200&&strstr(request.response,"\"observation\":null")&&strstr(request.response,"\"revision\":1"));
+    runtime_wait_counts(2,1);assert(atomic_load(&fixture_body_writes)==0);
     puts("production weather worker/HTTP bounded wait, late result, no PUT retry: PASS");
 }

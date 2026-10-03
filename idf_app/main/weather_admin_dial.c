@@ -192,6 +192,9 @@ static bool observation_parse(const char *body,size_t length,char *out,size_t ca
     for(size_t n=0;n+5<length;n++)if(!memcmp(body+n,"\\u0000",6))return false;
     cJSON *root=cJSON_ParseWithLengthOpts(body,length,NULL,false),*filtered=NULL;
     cJSON *weather=cJSON_GetObjectItemCaseSensitive(root,"weather");
+    /* An array child has no object key. Reject the container before walking
+     * named members; malformed optional data must not crash settings reads. */
+    if(!cJSON_IsObject(weather)){cJSON_Delete(root);return false;}
     cJSON *operation=cJSON_GetObjectItemCaseSensitive(root,"operation");
     const char *names[]={"enabled","available","eligible","reason","dates","minima_c","last_successful_check"};
     bool ok=cJSON_IsObject(weather)&&bounded_text(operation,32);
@@ -199,6 +202,7 @@ static bool observation_parse(const char *body,size_t length,char *out,size_t ca
         for(cJSON *next=item->next;next;next=next->next)if(!strcmp(item->string,next->string))ok=false;
     unsigned seen=0;
     for(cJSON *item=weather?weather->child:NULL;item;item=item->next){
+        if(!item->string){ok=false;break;}
         unsigned bit=0;for(unsigned i=0;i<7;i++)if(!strcmp(item->string,names[i]))bit=1u<<i;
         if(!bit||(seen&bit))ok=false;
         seen|=bit;

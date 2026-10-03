@@ -486,6 +486,22 @@ static void test_weather_proxy_protected_and_exact(void) {
     cJSON_Delete(cold);cJSON_Delete(warm);
     observation_fixture=weather_fixture_2;r=fixture_request("/admin/api/weather",HTTP_GET,NULL);r.cookie=cookie;fixture_call(&r);assert(strstr(r.response,"USER_OFF"));
     observation_offline=true;r=fixture_request("/admin/api/weather",HTTP_GET,NULL);r.cookie=cookie;fixture_call(&r);assert(fixture_status(&r)==200&&strstr(r.response,"\"observation\":null"));observation_offline=false;
+    const char *bad_weather[]={"[1]","5","null","true","\"invalid\""};
+    for(unsigned i=0;i<sizeof bad_weather/sizeof bad_weather[0];i++){
+        cJSON *malformed=cJSON_Parse(weather_fixture_3);
+        cJSON_ReplaceItemInObjectCaseSensitive(malformed,"weather",cJSON_Parse(bad_weather[i]));
+        assert(cJSON_PrintPreallocated(malformed,observed_body,sizeof observed_body,false));observation_fixture=observed_body;
+        r=fixture_request("/admin/api/weather",HTTP_GET,NULL);r.cookie=cookie;fixture_call(&r);
+        assert(fixture_status(&r)==200&&strstr(r.response,"\"observation\":null")&&strstr(r.response,"\"revision\":0"));cJSON_Delete(malformed);
+    }
+    const char *nested_fields[]={"reason","dates","minima_c","last_successful_check"};
+    for(unsigned i=0;i<sizeof nested_fields/sizeof nested_fields[0];i++){
+        cJSON *malformed=cJSON_Parse(weather_fixture_3),*weather=cJSON_GetObjectItem(malformed,"weather");
+        cJSON_ReplaceItemInObjectCaseSensitive(weather,nested_fields[i],cJSON_Parse("[{\"invalid\":null}]"));
+        assert(cJSON_PrintPreallocated(malformed,observed_body,sizeof observed_body,false));observation_fixture=observed_body;
+        r=fixture_request("/admin/api/weather",HTTP_GET,NULL);r.cookie=cookie;fixture_call(&r);
+        assert(fixture_status(&r)==200&&strstr(r.response,"\"observation\":null"));cJSON_Delete(malformed);
+    }
     observation_fixture="{}";r=fixture_request("/admin/api/weather",HTTP_GET,NULL);r.cookie=cookie;fixture_call(&r);assert(fixture_status(&r)==200&&strstr(r.response,"\"observation\":null"));observation_fixture=weather_fixture_3;
     assert(!strstr(r.response,"token")&&!strstr(r.response,"private-weather-http"));
     const char *body="{\"expected_revision\":0,\"enabled\":true,\"latitude\":46.05,\"longitude\":14.5,\"timezone\":\"Europe/Ljubljana\"}";

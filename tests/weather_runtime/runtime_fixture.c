@@ -41,7 +41,13 @@ esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *co
     client->method=config->method;client->timeout=config->timeout_ms;
     client->weather=strstr(config->url,"weather-settings")!=NULL;
     if(client->weather)strcpy(client->response,"{\"revision\":1,\"enabled\":true,\"latitude\":46.05,\"longitude\":14.5,\"timezone\":\"Europe/Ljubljana\"}");
-    else strcpy(client->response,weather_fixture_0);
+    else {
+        strcpy(client->response,weather_fixture_0);
+        if(scenario==HTTP_OBSERVATION_MALFORMED){
+            char *weather=strstr(client->response,"\"weather\":");assert(weather);
+            strcpy(weather,"\"weather\":[1],\"weather_assistance_version\":1}");
+        }
+    }
     return client;
 }
 esp_err_t esp_http_client_set_header(esp_http_client_handle_t client,const char *name,const char *value) {
