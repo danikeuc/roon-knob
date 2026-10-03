@@ -1,6 +1,6 @@
 # Dial weather and playlist favorites candidate
 
-Frozen repaired source/build `5eb4c4506b031558bfaa3951d10a98dadc09105a`, 2026-10-03; documentation commits are separate. Scoped source re-review found the four consolidated repairs and malformed-observation amendment addressed; final documentation review remains pending. Pi and bridge remain separate deployment/evidence sources. No flash, NVS mutation, live Roon command, Pi command or energized valve test occurred.
+Frozen repaired source/build `5eb4c4506b031558bfaa3951d10a98dadc09105a`, 2026-10-03; documentation commits are separate. Scoped source re-review found the four consolidated repairs and malformed-observation amendment addressed; repair-documentation review is complete; the subsequent approved policy/documentation delta awaits local acceptance review. Pi and bridge remain separate deployment/evidence sources. No flash, NVS mutation, live Roon command, Pi command or energized valve test occurred.
 
 ## Use after separately authorized installation
 
@@ -22,7 +22,7 @@ Phone weather GET retains its five saved-setting fields and adds optional `obser
 
 ## Exact local gates and artifact
 
-Complete playlist, admin and valve runners pass. All unaffected test-shared commands (including ASan/UBSan and checker self-test) pass. Mandatory dependency inventory FAILS on exactly 36 permitted edges pending actual human approval after automatic review rejected the policy change. The proposal remains unapplied, so full CI and combined required-gate acceptance are NOT_READY.
+Complete playlist, admin and valve runners pass. All unaffected test-shared commands (including ASan/UBSan and checker self-test) pass. The owner approved exactly 36 expected_edges additions, applied in policy-only commit `314224b2d817d7f90afb58fbaeeaf91484eb7ac2`. Every other policy value remains unchanged. Mandatory inventory now passes (340 allowed, 4 boundary-owned, 22 grandfathered), as do header-index/negative self-tests and the complete current docker.yml test-shared command block including ASan/UBSan; `/tmp/approval-closure-shared.log`. The prior approval rejection and failed gate remain historical evidence. Current status is READY_FOR_LOCAL_ACCEPTANCE_REVIEW for this policy/documentation delta, without a claim that every CI target or historical check passed.
 
 ESP-IDF v5.5.5 `idf.py -C idf_app -B /tmp/freeze-build-tools/dial-build build` passes from frozen repaired source. App 2,188,928 bytes (0x216680),16% partition free, SHA256 `acb88426f83e532db3570909e4750126e31dab92e0e525a79c1afed133ac4d34`. Fixed version label 2.5.3-valve.1-dev is not source attestation. Local preserved app/ELF/bootloader/partition/OTA-data hashes are in `/tmp/freeze-build-tools/final-fix-amend-20261003/manifest.json`. No artifact was published/flashed; original v1.0.0/v1.1.0 identities remain untouched.
 
@@ -36,4 +36,4 @@ Rollback stops the new writer/jobs then restores reviewed original bridge image/
 
 ## Consolidated repair status
 
-Pi 31245c1 and Dial 5eb4c45 address WR-01 through WR-04 with observed RED→GREEN regressions. Current source builds and affected Pi/Dial suites pass; scoped source repairs are verified; final documentation review remains pending. The original W6/P5 artifacts remain preserved under `/tmp/freeze-build-tools/w6-p5-20261003/`. No bridge production change or repeated bridge suite is included. Full acceptance stays NOT_READY because the exact 36-edge dependency policy proposal remains unapplied; existing strict bridge test lint is a recorded baseline limitation under P5, never reported as PASS.
+Pi 31245c1 and Dial 5eb4c45 address WR-01 through WR-04 with observed RED→GREEN regressions. Current source builds and affected Pi/Dial suites pass; scoped source repairs are verified; repair-documentation review is complete; the subsequent approved policy/documentation delta awaits local acceptance review. The original W6/P5 artifacts remain preserved under `/tmp/freeze-build-tools/w6-p5-20261003/`. No bridge production change or repeated bridge suite is included. The owner-approved policy addition closes the last repository approval block; local acceptance review of this delta remains pending; existing strict bridge test lint is a recorded baseline limitation under P5, never reported as PASS.
