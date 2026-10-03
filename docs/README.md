@@ -1,5 +1,7 @@
 # Documentation
 
+[Weather and playlist candidate operations](operations/playlist-favorites.md) records exact local source/build evidence and remaining deployment/hardware gates.
+
 ## Quick Links
 
 | Area | Path | Description |

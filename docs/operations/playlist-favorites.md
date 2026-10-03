@@ -1,0 +1,37 @@
+# Dial weather and playlist favorites candidate
+
+Frozen source/build `bf45eb615030411e6a8b2b73cd5d032170f6074b`, 2026-10-03; documentation follows the fixture build source. Production implementation was independently re-reviewed at parent `890e1fdbdd4f3e23b6641acdaa7bbf3260c59075`. Pi and bridge remain separate deployment/evidence sources. No flash, NVS mutation, live Roon command, Pi command or energized valve test occurred.
+
+## Use after separately authorized installation
+
+Privately provision compatible bridge namespace credentials for the exact configured Sauna zone; absent credentials/capability keep playlist controls unavailable. Select zero to five existing playlists in the PIN-protected admin, preserving order. GET catalog is paginated; PUT favorites uses revision/Core epoch and authoritative read-back before Saved. Protected routes are GET `/admin/api/roon/playlists?cursor=...`, GET/PUT `/admin/api/roon/favorites`; PUT preserves CSRF/Host/Origin checks. Browser labels are escaped text and tokens never appear in HTML/JS/status/URLs. Favorites live in the bridge data volume; PIN, rotation and shower duration remain on Dial.
+
+On the Roon page only, a stationary central artwork or placeholder hold of 2,000 ms opens the picker. Opening touch is consumed through release; a new short tap confirms. Encoder turns choose favorites/Back without volume changes. Back or 15-second inactivity exits without playing. Title long touch keeps settings behavior. Wake, overlays, rotation and screen transition fence old input. Identity proof is captured from the real favorites response: favorite/revision/Core epoch, configured zone, endpoint/session and credential generation must all still match at confirmation and transport write. Changes reject dispatch. Core reconnect/unresolved saved identity requires reselection; titles never select a substitute.
+
+The exact native Play Now path intends to replace the queue and start from track one, unchanged volume, Sauna only. Current server production confirmation remains Accepted → Unknown after 15 seconds when causal first-track evidence is unavailable. Unknown action effect is visible and is never automatically retried; a new deliberate selection is needed after operator assessment. Saving/browsing never plays.
+
+Weather status is owned by Pi: AUTO is continuous logical SUPPLY with zero countdown; a bounded manual interval keeps its original deadline; USER_OFF persists until fresh deliberate START. Weather settings and mode are disabled/manual_timed for staging. PT100 is informational. Dial weather settings use a separate restricted private token from playlist/display/admin scopes. Never treat the display as physical valve feedback.
+
+## Resources and isolation
+
+Playlist has one worker (12,288-byte stack, priority 3), one admitted heap-owned job and a one-item RTOS result queue. Admin caller wait is <=5,000 ms; late/stuck worker ownership retains admission, preventing proliferation. Unsent actions expire at 10,000 ms; receipt polling is no faster than 1,000 ms for 15,000 ms. Native bridge admin queue admission/async locks can wait before their response timeout begins; the 5-second Dial caller wait does not prove worker cancellation. Artwork uses a separate one-item result queue, endpoint/zone generation, bounded payload/timeouts and at most three automatic attempts per failed identity. Control/display work owns distinct state and does not wait on a media-task spinlock.
+
+The combined host fixture executes real valve parser/client/UI alongside the production playlist RTOS/HTTP worker with simulated primitives/transports. AUTO/manual/USER_OFF refresh and deliberate STOP progress while the playlist worker is latched inside HTTP open; stale media error leaves shower state unchanged. Direct picker touch/rotate calls cover release/new-tap and selection, and page classification plus a manual toggle covers that transition. It does not execute the hardware touch callback/encoder router during the same stall. A separate production-callback extraction fixture checks four rotations, overlays/wake, opening release and stale encoder epochs with client/valve stubs. Neither demonstrates physical input timing or installed runtime.
+
+## Exact local gates and artifact
+
+Complete playlist, admin and valve runners pass. All unaffected test-shared commands (including ASan/UBSan and checker self-test) pass. Mandatory dependency inventory FAILS on exactly 36 permitted edges pending actual human approval after automatic review rejected the policy change. The proposal remains unapplied, so full CI and combined required-gate acceptance are NOT_READY.
+
+ESP-IDF v5.5.5 `idf.py -C idf_app -B /tmp/freeze-build-tools/dial-build build` passes at frozen source; incremental production inputs equal reviewed 890e1fdb. App 2,182,528 bytes (0x214d80), 17% partition free, SHA256 `ad614db53794080eb1e44048d2a4a99d1a68e4befaf0a3671993adcba1941995`. Fixed version label 2.5.3-valve.1-dev is not source attestation. Local preserved app/ELF/bootloader/partition/OTA-data hashes are in `/tmp/freeze-build-tools/w6-p5-20261003/manifest.json`. No artifact was published/flashed; original v1.0.0/v1.1.0 identities remain untouched.
+
+## Later deployment, acceptance and rollback
+
+Before later authorized installation, capture exact existing firmware and full flash/NVS backup, current PIN/duration/rotation and protected private setup. On bridge, capture original running Synology image digest/config/data/network=host/actual restart policy/mount; those current runtime inputs are UNKNOWN here. Preserve the observed policy/mount instead of replacing them with compose examples. Keep bridge FIRMWARE_AUTO_UPDATE=false and custom upstream OTA disabled.
+
+Deploy compatible server/device only under later authorization; initially retain manual_timed and weather disabled. Read back capability, configured Sauna identity and settings without dispatch. Preserve the matching Pi SQLite weather-identity with any candidate database backup. Future exact-artifact runtime acceptance must separately cover empty queue, populated replacement, track one, unchanged volume, five favorites and restart, uncertain result/no duplicate, touch/encoder/all rotations and shower navigation/regression. A live playback test is Sauna-only and contains no valve commands. A disconnected timed action or 24 V physical test needs its own bounded approval and successful Pi software/service/readback gates.
+
+Rollback stops the new writer/jobs then restores reviewed original bridge image/config/data and exact prior Dial firmware/NVS, preserving original network/restart/mount. Independently disable weather, request DRAIN and restore Pi database plus matching weather-identity or protected pre-migration snapshot through the Pi runbook. Do not restore a running database. GPIO high/high is logical output only. Continuous-duty rating, daemon-independent crash enforcement, pre-application reboot behavior and Pi/relay/24 V power-loss hydraulic return remain unverified; 24 V remains disconnected.
+
+## Pending independent review findings
+
+This frozen candidate remains NOT_READY. Independent review reproduced a Pi nonce/deadline gap around a delayed SQLite CAS, and a Dial picker consuming a page swipe after fresh playlist confirmation. Consolidated repair and affected test/build evidence are pending. The combined fixture exercises UI handlers directly; actual touch/encoder routing is covered separately with stubs, so it does not prove navigation to STOP during that picker state.

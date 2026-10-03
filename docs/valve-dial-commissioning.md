@@ -1,5 +1,7 @@
 # Valve dial commissioning
 
+The 2026-10-03 [weather/playlist candidate](operations/playlist-favorites.md) has local verification only and keeps all physical/flash gates below. Its dependency inventory remains FAIL pending approval; existing historical observations retain their original revisions.
+
 ## Source and host gate
 
 The firmware source compiled and host tested after final review was commit `1bd04441a236e0693fa54bd1bd0a7437826f07ff` on `codex/roon-valve-dial`. ESP-IDF 5.5.5 built the ESP32-S3 image `idf_app/build/hiphi_dial.bin` at size `0x1fb240` (smallest app partition `0x280000`, free `0x84dc0`, 21%) with SHA-256 `edef9e7f5ff527dfdfff9164ef619f3ddefd9632d21b9a6a47fbade2e07871e1`. The Pi source is `5ae3c3ea53feae37147b72782308770605113fde`; the bridge compose example is `2c119689e22e988f343226d49c0b2dc195707437`. This evidence documentation commit follows the compiled firmware source commit. Hardware commissioning later found that this image could overflow the `valve_http` task stack, so it is superseded by the corrected artifact recorded below.
