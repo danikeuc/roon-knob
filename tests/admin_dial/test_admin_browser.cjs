@@ -14,6 +14,8 @@ function embedded(name) {
  const page=await browser.newPage({viewport:{width:390,height:844},isMobile:true});
  let authenticated=false,setup=true,saveCount=0,failSave=false,abortSessionAfterLogout=false;
  let value={duration_minutes:10,rotation_degrees:0,generation:1,duration_capability_available:true,short_duration_supported:true};
+ let weather={revision:0,enabled:false,latitude:null,longitude:null,timezone:'Europe/Ljubljana'};
+ let weatherPuts=0,weatherLostReply=false,weatherOffline=false,weatherConflict=false;
  const calls=[];
  await page.route('**/*',async route=>{
   const request=route.request(),url=new URL(request.url());calls.push(url.pathname);
@@ -23,7 +25,18 @@ function embedded(name) {
   let data={};const op=url.pathname.split('/').pop();
   if(op==='session'){if(abortSessionAfterLogout&&!authenticated)return route.abort('failed');data={setup_required:setup,authenticated,...(authenticated?{csrf:'c'.repeat(64)}:{})};}
   else if(op==='settings'){if(!authenticated)return route.fulfill({status:401,contentType:'application/json',body:'{}'});data=value;}
-  else if(op==='setup'||op==='recover'||op==='recovery-code'){data={recovery_code:(op==='recovery-code'?'d':'b').repeat(32)};setup=false;}
+  else if(op==='weather'){
+   if(weatherOffline)return route.abort('failed');
+   if(request.method()==='PUT'){
+    weatherPuts++;assert.equal(request.headers()['x-csrf-token'],'c'.repeat(64));
+    const posted=request.postDataJSON();assert.deepEqual(Object.keys(posted).sort(),['enabled','expected_revision','latitude','longitude','timezone']);
+    if(weatherConflict){weather={...weather,revision:weather.revision+1,enabled:false};return route.fulfill({status:409,body:'{}'});}
+    assert.equal(posted.expected_revision,weather.revision);
+    weather={revision:weather.revision+1,enabled:posted.enabled,latitude:posted.latitude,longitude:posted.longitude,timezone:posted.timezone};
+    if(weatherLostReply)return route.abort('failed');
+   }data=weather;
+  }
+  else if(op==='setup' ||op==='recover'||op==='recovery-code'){data={recovery_code:(op==='recovery-code'?'d':'b').repeat(32)};setup=false;}
   else if(op==='login')authenticated=true;
   else if(op==='logout')authenticated=false;
   else if(op==='shower'||op==='rotation'){
@@ -45,6 +58,28 @@ function embedded(name) {
  assert.equal(await page.evaluate(()=>localStorage.length+sessionStorage.length),0);
  await page.locator('#code-saved').click();assert.equal(await page.locator('#issued-code').textContent(),'');
  await page.locator('#login input[name=pin]').fill('0123');await page.locator('#login button').click();
+ await page.locator('#weather').waitFor({state:'visible'});
+ await page.locator('#weather input[name=latitude]').fill('46.05');
+ await page.locator('#weather input[name=longitude]').fill('14.5');
+ await page.locator('#weather input[name=enabled]').check();
+ await page.locator('#weather button').click();
+ await page.waitForFunction(()=>!document.querySelector('#weather button').disabled);
+ assert.equal(weatherPuts,1);assert.equal(weather.enabled,true);
+ assert.match(await page.locator('#weather-confirmed').textContent(),/46.05/);
+ weatherLostReply=true;await page.locator('#weather input[name=enabled]').uncheck();
+ await page.locator('#weather button').click();
+ await page.waitForFunction(()=>!document.querySelector('#weather button').disabled);
+ assert.equal(weatherPuts,2);assert.equal(await page.locator('#weather input[name=enabled]').isChecked(),false);
+ assert.match(await page.locator('#message').textContent(),/Odgovor/);
+ weatherLostReply=false;weatherConflict=true;
+ await page.locator('#weather input[name=enabled]').check();await page.locator('#weather button').click();
+ await page.waitForFunction(()=>!document.querySelector('#weather button').disabled);
+ assert.equal(weatherPuts,3);assert.equal(await page.locator('#weather input[name=enabled]').isChecked(),false);
+ weatherConflict=false;weatherOffline=true;await page.reload();
+ await page.locator('#shower').waitFor({state:'visible'});
+ assert.match(await page.locator('#weather-confirmed').textContent(),/ni potrjeno/);
+ assert.equal(await page.locator('#weather button').isDisabled(),true);
+ weatherOffline=false;await page.reload();
  await page.locator('#shower').waitFor({state:'visible'});await page.locator('#shower select').selectOption('3');
  await page.locator('#shower button').click();assert.equal(await page.locator('#shower button').isDisabled(),true);
  await page.waitForFunction(()=>!document.querySelector('#shower button').disabled);assert.equal(saveCount,1);assert.match(await page.locator('#confirmed').textContent(),/3 min/);

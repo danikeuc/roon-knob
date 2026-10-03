@@ -43,3 +43,9 @@ python3 tests/admin_dial/test_driver_input.py
 
 # Execute registered STA/AP/admin handlers against the host HTTP transport.
 sh scripts/test_admin_http.sh
+
+cc -std=c11 -Wall -Wextra -Werror -DWEATHER_ADMIN_HOST_TEST \
+    -I"${IDF_PATH:-/tmp/esp-idf-5.5.5}/components/json/cJSON" -Iidf_app/main \
+    tests/admin_dial/test_weather_admin.c idf_app/main/weather_admin_dial.c idf_app/main/valve_logic.c \
+    "${IDF_PATH:-/tmp/esp-idf-5.5.5}/components/json/cJSON/cJSON.c" -lm -o "$tmp_dir/test_weather"
+"$tmp_dir/test_weather"

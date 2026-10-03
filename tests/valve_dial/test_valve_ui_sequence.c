@@ -74,6 +74,8 @@ void lv_obj_clear_state(lv_obj_t *o, unsigned s) { o->state &= ~s; }
 int lv_color_hex(unsigned c) { return (int)c; }
 void lv_obj_set_style_border_color(lv_obj_t *o, int c, int s) {(void)o;(void)c;(void)s;}
 void ui_set_valve_active(bool active) { valve_indicator = active; }
+static uint32_t weather_generation;
+uint32_t weather_admin_generation(void) { return weather_generation; }
 static uint32_t config_generation;
 uint32_t valve_config_generation(void) { return config_generation; }
 bool valve_config_load(char *url, size_t ul, char *token, size_t tl) {
@@ -85,7 +87,8 @@ bool valve_client_start(valve_client_callback_fn callback, void *context) {
 bool valve_client_request_get_tagged(uint32_t *id) { gets++; next_id++; if (id) *id = next_id; return true; }
 bool valve_client_request_post_for_config(const valve_request_t *request, uint32_t generation, uint32_t *id) {
     if (!request || generation != config_generation) return false;
-    assert(request->action == VALVE_ACTION_START || request->action == VALVE_ACTION_DRAIN);
+    assert(request->action == VALVE_ACTION_START || request->action == VALVE_ACTION_DRAIN ||
+           request->action == VALVE_ACTION_WEATHER_START || request->action == VALVE_ACTION_WEATHER_STOP);
     last_action = request->action; last_duration = request->duration_seconds;
     posts++; next_id++; if (id) *id = next_id; return true;
 }
@@ -432,5 +435,25 @@ int main(void) {
     valve_ui_touch(100, 260, false, false, fake_now + 2001);
     assert(posts == before_stale + 1 && last_action == VALVE_ACTION_DRAIN);
     test_cross_task_capability_snapshot();
+    process(); /* settle the preceding intentional Wi-Fi epoch change */
+    valve_status_t automatic={.state=VALVE_SUPPLY,.weather_assisted=true,.weather_assistance_version=1,
+        .operation=VALVE_AUTO_SUPPLY,.control_revision_available=true,.control_revision=8};
+    strcpy(automatic.action_nonce,"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    valve_ui_set_status(&automatic);process();
+    assert(find_label("AUTO") && valve_indicator);
+    int before_weather=posts;
+    valve_ui_touch(100,260,true,false,fake_now);
+    valve_ui_touch(100,260,false,false,fake_now+1);
+    assert(posts==before_weather+1 && last_action==VALVE_ACTION_WEATHER_STOP);
+    automatic.state=VALVE_DRAIN;automatic.operation=VALVE_USER_OFF;
+    automatic.timed_shower_duration_supported=true;
+    valve_ui_set_status(&automatic);
+    valve_ui_touch(100,260,true,false,fake_now);
+    ++weather_generation;
+    valve_ui_touch(100,260,true,false,fake_now+2000);
+    valve_ui_touch(100,260,false,false,fake_now+2001);
+    assert(posts==before_weather+1); /* settings edit cancels the whole old contact */
+    process();
+    assert(!valve_indicator);
     puts("valve UI sequence tests passed");
 }

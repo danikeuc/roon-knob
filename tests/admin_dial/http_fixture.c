@@ -204,7 +204,7 @@ admin_result_t admin_auth_is_configured(bool*out) {
     *out=configured;
     return ADMIN_OK;
 }
-admin_result_t admin_auth_setup(const char*p,const char*r,char*out) {
+admin_result_t admin_auth_setup(const char*p,const char*r,char out[33]) {
     auth_mutations++;
     if(next_auth!=ADMIN_OK)return next_auth;
     if(strcmp(p,r))return ADMIN_INVALID;
@@ -213,7 +213,7 @@ admin_result_t admin_auth_setup(const char*p,const char*r,char*out) {
     strcpy(out,"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
     return ADMIN_OK;
 }
-admin_result_t admin_auth_login(const char*p,char*out) {
+admin_result_t admin_auth_login(const char*p,char out[65]) {
     auth_mutations++;
     (void)p;
     if(storage_error)return ADMIN_STORAGE_ERROR;
@@ -235,7 +235,7 @@ void admin_auth_logout(const char*s) {
     (void)s;
     valid_session=false;
 }
-admin_result_t admin_auth_recover(const char*c,const char*p,const char*r,char*out) {
+admin_result_t admin_auth_recover(const char*c,const char*p,const char*r,char out[33]) {
     auth_mutations++;
     (void)c;
     (void)p;
@@ -252,7 +252,7 @@ admin_result_t admin_auth_change_pin(const char*s,const char*p,const char*r) {
     valid_session=false;
     return next_auth;
 }
-admin_result_t admin_auth_reissue_recovery(const char*s,const char*p,char*out) {
+admin_result_t admin_auth_reissue_recovery(const char*s,const char*p,char out[33]) {
     (void)s;
     (void)p;
     strcpy(out,"dddddddddddddddddddddddddddddddd");
@@ -414,3 +414,12 @@ int xTaskCreate(void(*f)(void*),const char*n,unsigned s,void*p,unsigned a,void*q
 }
 
 void admin_settings_cancel_pending(void) {}
+
+uint32_t valve_config_generation(void) { return 0; }
+uint32_t valve_client_current_session(void) { return 1; }
+bool valve_config_weather_load(char *url,size_t ul,char *token,size_t tl) {
+    (void)ul;(void)tl;strcpy(url,"http://192.0.2.10:8081");strcpy(token,"private-weather-http");return true;
+}
+bool valve_config_save_weather(const char *url,const char *display,const char *weather) {
+    (void)weather;return valve_config_save(url,display);
+}

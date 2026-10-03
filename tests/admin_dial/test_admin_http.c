@@ -6,6 +6,7 @@
 #include <string.h>
 #include "cJSON.h"
 #include "admin_server_dial.h"
+#include "weather_admin_dial.h"
 static void test_old_config_routes_require_session(void) {
     fixture_reset();
     config_server_start();
@@ -427,7 +428,76 @@ static void test_ipv4_host_on_dual_stack_socket(void) {
     config_server_stop();
 }
 
+static unsigned weather_gets,weather_puts;
+static bool weather_missing,weather_timeout;
+static uint64_t weather_revision;
+static bool weather_enabled;
+static int weather_transport(const char *method,const char *url,const char *header,const char *token,
+    const char *body,size_t body_length,int *status,char *out,size_t capacity,size_t *length,void *context) {
+    (void)context;
+    assert(!strcmp(url,"http://192.0.2.10:8081/api/v1/display/weather-settings"));
+    assert(!strcmp(header,"X-Weather-Settings-Token")&&!strcmp(token,"private-weather-http"));
+    if(weather_missing)return -1;
+    *status=200;
+    if(!strcmp(method,"PUT")) {
+        ++weather_puts;weather_settings_write_t request;
+        assert(weather_settings_write_parse(body,body_length,&request));
+        if(request.expected_revision!=weather_revision)*status=409;
+        else {++weather_revision;weather_enabled=request.enabled;}
+        if(weather_timeout)return -3;
+    }else ++weather_gets;
+    int n=snprintf(out,capacity,"{\"revision\":%llu,\"enabled\":%s,\"latitude\":46.05,\"longitude\":14.5,\"timezone\":\"Europe/Ljubljana\"}",
+        (unsigned long long)weather_revision,weather_enabled?"true":"false");
+    assert(n>0 && (size_t)n<capacity);*length=(size_t)n;return 0;
+}
+static void test_weather_proxy_protected_and_exact(void) {
+    fixture_reset();config_server_start();login();
+    weather_admin_test_transport(weather_transport,NULL);
+    weather_revision=0;weather_enabled=false;weather_gets=weather_puts=0;
+    httpd_req_t r=fixture_request("/admin/api/weather",HTTP_GET,NULL);r.cookie=cookie;
+    fixture_call(&r);assert(fixture_status(&r)==200);
+    cJSON *json=cJSON_Parse(r.response);assert(json && cJSON_GetArraySize(json)==5);cJSON_Delete(json);
+    assert(!strstr(r.response,"token")&&!strstr(r.response,"private-weather-http"));
+    const char *body="{\"expected_revision\":0,\"enabled\":true,\"latitude\":46.05,\"longitude\":14.5,\"timezone\":\"Europe/Ljubljana\"}";
+    const char *origins[]={NULL,"null","http://evil.example"};
+    for(unsigned i=0;i<3;++i) {
+        r=fixture_request("/admin/api/weather",HTTP_PUT,body);r.cookie=cookie;r.csrf=csrf;r.origin=origins[i];
+        fixture_call(&r);assert(fixture_status(&r)==403 && weather_puts==0);
+    }
+    r=fixture_request("/admin/api/weather",HTTP_PUT,body);r.cookie=cookie;r.csrf="bad";
+    fixture_call(&r);assert(fixture_status(&r)==403 && weather_puts==0);
+    r=fixture_request("/admin/api/weather",HTTP_PUT,body);r.cookie=cookie;r.csrf=csrf;
+    fixture_call(&r);assert(fixture_status(&r)==200 && weather_puts==1);
+    assert(strstr(r.response,"\"revision\":1")&&strstr(r.response,"\"enabled\":true"));
+    r=fixture_request("/admin/api/weather",HTTP_PUT,body);r.cookie=cookie;r.csrf=csrf;
+    fixture_call(&r);assert(fixture_status(&r)==409 && weather_puts==2);
+    body="{\"expected_revision\":1,\"enabled\":false,\"latitude\":46.05,\"longitude\":14.5,\"timezone\":\"Europe/Ljubljana\"}";
+    weather_timeout=true;r=fixture_request("/admin/api/weather",HTTP_PUT,body);r.cookie=cookie;r.csrf=csrf;
+    fixture_call(&r);assert(fixture_status(&r)==503 && weather_puts==3);
+    weather_timeout=false;r=fixture_request("/admin/api/weather",HTTP_GET,NULL);r.cookie=cookie;
+    fixture_call(&r);assert(fixture_status(&r)==200 && weather_puts==3 && strstr(r.response,"\"revision\":2"));
+    const char *bad[]={"{}","{\"expected_revision\":2,\"enabled\":false,\"latitude\":null,\"longitude\":null,\"timezone\":\"UTC\",\"token\":\"private\"}"};
+    for(unsigned i=0;i<2;++i) {r=fixture_request("/admin/api/weather",HTTP_PUT,bad[i]);r.cookie=cookie;r.csrf=csrf;
+        fixture_call(&r);assert(fixture_status(&r)==422 && weather_puts==3);}
+    weather_missing=true;r=fixture_request("/admin/api/weather",HTTP_GET,NULL);r.cookie=cookie;
+    fixture_call(&r);assert(fixture_status(&r)==503 && !strstr(r.response,"private"));weather_missing=false;
+    r=fixture_request("/valves-config",HTTP_GET,NULL);r.cookie=cookie;fixture_call(&r);
+    assert(strstr(r.response,"name='weather_token' maxlength='128' value=''"));
+    assert(!strstr(fixture_logs,"private-weather-http"));
+    fixture_expire();r=fixture_request("/admin/api/weather",HTTP_GET,NULL);r.cookie=cookie;
+    unsigned prior=weather_gets;fixture_call(&r);assert(fixture_status(&r)==401 && weather_gets==prior);
+    config_server_stop();weather_admin_test_transport(NULL,NULL);
+}
+static void test_weather_route_requires_session(void) {
+    fixture_reset(); config_server_start();
+    httpd_req_t r=fixture_request("/admin/api/weather",HTTP_GET,NULL);
+    fixture_call(&r);
+    assert(fixture_status(&r)==401);
+    config_server_stop();
+}
 int main(void) {
+    test_weather_route_requires_session();
+    test_weather_proxy_protected_and_exact();
     test_ipv4_host_on_dual_stack_socket();
     test_nested_json_rejected_before_parser_and_auth();
     test_all_legacy_forms_and_escaped_values();

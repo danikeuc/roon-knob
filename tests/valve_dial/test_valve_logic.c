@@ -1,6 +1,7 @@
 #include "valve_logic.h"
 #include "valve_client_dial.h"
 #include "valve_config_dial.h"
+#include "weather_status_fixtures.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -176,11 +177,15 @@ static void parse_cases(void) {
 }
 
 static uint32_t config_generation;
+uint32_t weather_admin_generation(void) { return 0; }
 uint32_t valve_config_generation(void) { return config_generation; }
 bool valve_config_load(char *url, size_t ul, char *token, size_t tl) {
     assert(ul >= 32 && tl >= 32);
     strcpy(url, "http://192.0.2.10:8081"); strcpy(token, "private-test-token"); return true;
 }
+static bool fail_weather_post;
+static const char *weather_payload;
+static char weather_body[256];
 static int next_status = 200, post_status, posts, gets, fail_transport, disconnect_during_request;
 static int change_config_during_request;
 static int reconnect_on_get, callbacks, recovery_callbacks;
@@ -200,7 +205,8 @@ static int mock_transport(const char *method, const char *url, const char *token
         assert(request_len == 0 || (request_body && request_len == strlen(request_body)));
         posts++;
         assert(strcmp(url, "http://192.0.2.10:8081/api/v1/display/actions/timed-shower") == 0 ||
-               strcmp(url, "http://192.0.2.10:8081/api/v1/display/actions/drain") == 0);
+               strcmp(url, "http://192.0.2.10:8081/api/v1/display/actions/drain") == 0 ||
+               (weather_payload && (strstr(url,"/actions/start") || strstr(url,"/actions/stop"))));
         if (expected_post_route) assert(strcmp(url, expected_post_route) == 0);
         strcat(trace, "P");
     } else { gets++; assert(request_len == 0 && strcmp(method, "GET") == 0);
@@ -225,9 +231,19 @@ static int mock_transport(const char *method, const char *url, const char *token
     if (change_config_during_request) {
         change_config_during_request = 0; config_generation += 2;
     }
-    if (fail_transport) return -3;
+    if (fail_transport || (fail_weather_post && !strcmp(method,"POST"))) return -3;
     *status = strcmp(method, "POST") == 0 && post_status ? post_status : next_status;
-    const char *payload = strcmp(method, "POST") == 0 ? "{}" : ready;
+    char wrapped[2048];
+    const char *payload = strcmp(method, "POST") == 0 ? "{}" : weather_payload ? weather_payload : ready;
+    if (weather_payload && !strcmp(method,"POST")) {
+        assert(request_len < sizeof weather_body);
+        memcpy(weather_body,request_body,request_len); weather_body[request_len]=0;
+        const char *id=strstr(weather_body,"request_id\":\""); assert(id);
+        id += strlen("request_id\":\"");
+        char uuid[37]; memcpy(uuid,id,36); uuid[36]=0;
+        snprintf(wrapped,sizeof wrapped,"{\"request_id\":\"%s\",\"accepted\":true,\"control_revision\":1,\"status\":%s}",uuid,weather_fixture_3);
+        payload=wrapped;
+    }
     *len = strlen(payload); memcpy(body, payload, *len);
     return 0;
 }
@@ -541,4 +557,61 @@ static void test_short_setting_with_missing_capability_blocks_start(void) {
     assert(valve_client_post(&(valve_request_t){VALVE_ACTION_DRAIN, 0}, &status) == VALVE_CLIENT_OK);
     assert(duration_posts == 1);
 }
-int main(void) { capability_parse_cases(); temperature_parse_cases(); temperature_format_cases(); parse_cases(); request_cases(); scheduling_cases(); start_admission_cases(); completion_order_cases(); recovery_session_cases(); dial_cases(); config_change_cases(); test_duration_cache_ordering(); test_start_captures_selected_duration(); test_legacy_server_uses_empty_600_request(); test_short_setting_with_missing_capability_blocks_start(); puts("valve parser/client tests passed"); }
+static void weather_request_cases(void) {
+    valve_status_t status; uint32_t id;
+    weather_payload=weather_fixture_0;
+    expected_post_route="http://192.0.2.10:8081/api/v1/display/actions/start";
+    valve_client_test_transport(mock_transport,NULL); valve_client_test_clock(client_clock);
+    valve_client_on_reconnect(); posts=gets=0; trace[0]=0; client_now_ms=100;
+    valve_request_t action={.action=VALVE_ACTION_WEATHER_START,.duration_seconds=180};
+    assert(valve_client_request_post_for_config(&action,config_generation,&id));
+    valve_client_test_run_pending();
+    assert(posts==1 && gets>=1);
+    assert(strstr(weather_body,"\"expected_control_revision\":1"));
+    assert(strstr(weather_body,"\"duration_seconds\":180"));
+    assert(strstr(weather_body,"\"action_nonce\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""));
+    assert(valve_client_post(&action,&status)==VALVE_CLIENT_OK && status.operation==VALVE_AUTO_SUPPLY);
+    expected_post_route="http://192.0.2.10:8081/api/v1/display/actions/stop";
+    action.action=VALVE_ACTION_WEATHER_STOP;
+    assert(valve_client_post(&action,&status)==VALVE_CLIENT_OK);
+    assert(!strstr(weather_body,"duration_seconds"));
+    posts=0; fail_transport=1;
+    assert(valve_client_post(&action,&status)!=VALVE_CLIENT_OK);
+    valve_client_test_run_pending(); assert(posts==0); fail_transport=0;
+    posts=0; fail_weather_post=true;
+    assert(valve_client_post(&action,&status)==VALVE_CLIENT_TIMEOUT);
+    valve_client_test_run_pending();assert(posts==1); /* uncertain dispatch is never retried */
+    fail_weather_post=false;
+    action.action=VALVE_ACTION_WEATHER_START;
+    expected_post_route="http://192.0.2.10:8081/api/v1/display/actions/start";
+    advance_on_post_ms=10000;
+    assert(valve_client_post(&action,&status)==VALVE_CLIENT_TIMEOUT && status.state==VALVE_UNKNOWN);
+    advance_on_post_ms=0;
+    posts=0;client_now_ms=100;
+    assert(valve_client_request_post_for_config(&action,config_generation,&id));
+    client_now_ms=10100;valve_client_test_run_pending();assert(posts==0);
+    weather_payload=NULL; expected_post_route=NULL;
+    assert(valve_client_post(&action,&status)==VALVE_CLIENT_INVALID); /* fresh capability missing */
+}
+static void weather_parse_cases(void) {
+    valve_status_t status;
+    const char *fixtures[] = {weather_fixture_0, weather_fixture_1, weather_fixture_2, weather_fixture_3};
+    const valve_state_t states[] = {VALVE_DRAIN, VALVE_SUPPLY, VALVE_DRAIN, VALVE_SUPPLY};
+    for (unsigned i=0; i<4; ++i) {
+        assert(valve_status_parse(fixtures[i], strlen(fixtures[i]), &status));
+        assert(status.state == states[i]);
+    }
+    assert(status.remaining_seconds == 0 && status.operation==VALVE_AUTO_SUPPLY);
+    char altered[2048];
+    const char *invalid_revision[]={"true","1.0","9007199254740992","null"};
+    for(unsigned i=0;i<4;++i) {
+        const char *at=strstr(weather_fixture_3,"\"control_revision\":8");assert(at);
+        size_t prefix=(size_t)(at-weather_fixture_3)+strlen("\"control_revision\":");
+        snprintf(altered,sizeof altered,"%.*s%s%s",(int)prefix,weather_fixture_3,invalid_revision[i],at+strlen("\"control_revision\":8"));
+        assert(!valve_status_parse(altered,strlen(altered),&status) && status.state==VALVE_UNKNOWN);
+    }
+    const char *at=strstr(weather_fixture_3,"\"operation\":\"AUTO_SUPPLY\"");assert(at);
+    snprintf(altered,sizeof altered,"%.*s\"operation\":\"FUTURE\"%s",(int)(at-weather_fixture_3),weather_fixture_3,at+strlen("\"operation\":\"AUTO_SUPPLY\""));
+    assert(!valve_status_parse(altered,strlen(altered),&status));
+}
+int main(void) { weather_parse_cases(); weather_request_cases(); capability_parse_cases(); temperature_parse_cases(); temperature_format_cases(); parse_cases(); request_cases(); scheduling_cases(); start_admission_cases(); completion_order_cases(); recovery_session_cases(); dial_cases(); config_change_cases(); test_duration_cache_ordering(); test_start_captures_selected_duration(); test_legacy_server_uses_empty_600_request(); test_short_setting_with_missing_capability_blocks_start(); puts("valve parser/client tests passed"); }

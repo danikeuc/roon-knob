@@ -17,7 +17,7 @@ assert "name='pi_token' maxlength='128' value=''" in valves_html
 valves_get = s[s.index('static esp_err_t valves_config_get_handler'):s.index('static bool decode_form_value')]
 assert 'valve_config_load' not in valves_get
 assert 'HTML_VALVES_CONFIG' in valves_get
-assert 'valve_config_save(' in s and 'valve_config_clear(' in s
+assert 'valve_config_save_weather(' in s and 'valve_config_clear(' in s
 new_handlers = s[s.index('static esp_err_t valves_config_get_handler'):s.index('static esp_err_t wifi_add_handler')]
 assert 'ESP_LOG' not in new_handlers
 assert 'static esp_err_t config_post_handler(' not in new_handlers

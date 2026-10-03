@@ -5,7 +5,7 @@
 #include <sys/types.h>
 #include "esp_err.h"
 typedef void *httpd_handle_t;
-typedef enum {HTTP_GET,HTTP_POST} httpd_method_t;
+typedef enum {HTTP_GET,HTTP_POST,HTTP_PUT} httpd_method_t;
 typedef struct httpd_req {const char *uri; size_t content_len; httpd_method_t method; void *user_ctx; const char *body,*cookie,*origin,*host,*csrf,*type; size_t offset; char response[24000],status[40],set_cookie[256],cache[40],location[160];} httpd_req_t;
 typedef struct {const char *uri; httpd_method_t method; esp_err_t (*handler)(httpd_req_t*); void *user_ctx;} httpd_uri_t;
 typedef struct {int server_port,max_uri_handlers,stack_size; bool (*uri_match_fn)(const char*,const char*,size_t);} httpd_config_t;

@@ -1,6 +1,7 @@
 #include "valve_ui_dial.h"
 #include "valve_client_dial.h"
 #include "valve_config_dial.h"
+#include "weather_admin_dial.h"
 #include "ui.h"
 #include <stdio.h>
 #include <string.h>
@@ -39,6 +40,7 @@ static valve_observation_gate_t s_gate;
 static bool s_recovery_needed;
 static bool s_touch_moved;
 static uint32_t s_config_generation;
+static uint32_t s_weather_generation;
 /* UI owns writes. The exported getter takes a zero-wait lock or fails closed,
  * so the HTTP task never observes a partial publication or waits on LVGL. */
 static valve_duration_capability_snapshot_t s_capability;
@@ -91,7 +93,8 @@ static bool selected_start_request(valve_request_t *request) {
     uint16_t seconds;
     if (!valve_client_selected_duration_get(&seconds) ||
         (seconds != 600 && !s_status.timed_shower_duration_supported)) return false;
-    if (request) *request = (valve_request_t){.action = VALVE_ACTION_START,
+    if (request) *request = (valve_request_t){.action = s_status.weather_assisted && s_status.weather_assistance_version==1 ?
+                                                VALVE_ACTION_WEATHER_START : VALVE_ACTION_START,
                                                 .duration_seconds = seconds};
     return true;
 }
@@ -227,7 +230,7 @@ static void render(uint32_t now_ms) {
         char text[32];
         snprintf(text, sizeof text, "%lu:%02lu", (unsigned long)(remaining / 60),
                  (unsigned long)(remaining % 60));
-        lv_label_set_text(s_action_label, text);
+        lv_label_set_text(s_action_label, s_status.operation==VALVE_AUTO_SUPPLY ? "AUTO" : text);
         lv_obj_clear_flag(s_rain, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_snow, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_style_bg_color(s_relay_left, lv_color_hex(ACTIVE_COLOR), 0);
@@ -275,6 +278,7 @@ void valve_ui_init(void) {
     s_configured = valve_config_load(url, sizeof url, token, sizeof token);
     memset(token, 0, sizeof token);
     s_config_generation = valve_config_generation();
+    s_weather_generation = weather_admin_generation();
     s_status.state = VALVE_UNKNOWN;
     valve_gate_link(&s_gate, valve_client_current_session());
     capability_invalidate();
@@ -353,6 +357,13 @@ static void fail_closed_overflow(uint32_t now_ms) {
     request_get(now_ms);
 }
 void valve_ui_process(uint32_t now_ms, bool awake) {
+    uint32_t weather_generation = weather_admin_generation();
+    if(weather_generation!=s_weather_generation) {
+        s_weather_generation=weather_generation;
+        consume_touch();valve_ui_set_unknown("Weather settings changed");
+        valve_gate_link(&s_gate,valve_client_current_session());
+        request_get(now_ms);
+    }
     uint32_t generation = valve_config_generation();
     if (generation != s_config_generation) {
         s_config_generation = generation;
@@ -381,6 +392,7 @@ void valve_ui_process(uint32_t now_ms, bool awake) {
         const valve_client_event_t *event = &completion.event;
         if (!connected || event->session != valve_client_current_session() ||
             event->config_generation != s_config_generation ||
+            event->weather_generation != s_weather_generation ||
             s_config_generation != valve_config_generation()) continue;
         uint64_t received_age_ms = monotonic_full_ms() - completion.received_at_ms;
         bool valid = event->result == VALVE_CLIENT_OK &&
@@ -411,7 +423,8 @@ void valve_ui_process(uint32_t now_ms, bool awake) {
     render(current_ms);
 }
 void valve_ui_touch(int x, int y, bool pressed, bool moved, uint32_t now_ms) {
-    if (s_config_generation != valve_config_generation() || (s_config_generation & 1u)) {
+    if (s_weather_generation != weather_admin_generation() ||
+        s_config_generation != valve_config_generation() || (s_config_generation & 1u)) {
         if (pressed) { s_touch_target_initialized = true; consume_touch(); }
         else valve_ui_cancel_touch();
         return;
@@ -420,7 +433,9 @@ void valve_ui_touch(int x, int y, bool pressed, bool moved, uint32_t now_ms) {
     if (!pressed) {
         if (action_area && valve_drain_tap_allowed(s_touch_drain, s_touch_moved,
              VALVE_GESTURE_NONE, s_configured, atomic_load(&s_connected)))
-            request_action(&(valve_request_t){.action = VALVE_ACTION_DRAIN});
+            request_action(&(valve_request_t){.action = fresh(now_ms) && s_status.weather_assisted &&
+                s_status.weather_assistance_version==1 && s_status.control_revision_available && s_status.action_nonce[0] ?
+                VALVE_ACTION_WEATHER_STOP : VALVE_ACTION_DRAIN});
         valve_ui_cancel_touch();
         return;
     }

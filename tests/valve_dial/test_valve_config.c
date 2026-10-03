@@ -8,6 +8,8 @@
 static char stored_url[VALVE_CONFIG_URL_LEN + 16];
 static char stored_token[VALVE_CONFIG_TOKEN_LEN + 16];
 static char stored_seal[VALVE_CONFIG_URL_LEN + VALVE_CONFIG_TOKEN_LEN + 16];
+static char stored_weather[VALVE_CONFIG_URL_LEN + VALVE_CONFIG_TOKEN_LEN + 16];
+static bool has_weather;
 static bool has_url, has_token, has_seal, corrupt_url, corrupt_token;
 static int fail_set_at, fail_get_at, fail_erase_at, fail_commit_at;
 static int tear_seal_at;
@@ -16,6 +18,7 @@ static int set_count, get_count, erase_count, commit_count;
 void fake_nvs_reset(void) {
     memset(stored_url, 0, sizeof(stored_url));
     memset(stored_token, 0, sizeof(stored_token));
+    has_weather=false;memset(stored_weather,0,sizeof stored_weather);
     memset(stored_seal, 0, sizeof(stored_seal));
     has_url = has_token = has_seal = corrupt_url = corrupt_token = false;
     fail_set_at = fail_get_at = fail_erase_at = fail_commit_at = tear_seal_at = 0;
@@ -24,6 +27,11 @@ void fake_nvs_reset(void) {
 
 int fake_nvs_get(const char *key, char *out, size_t *len) {
     if (++get_count == fail_get_at) return -1;
+    if(!strcmp(key,"weather_private")) {
+        size_t needed=strlen(stored_weather)+1;
+        if(!has_weather || *len<needed)return -1;
+        memcpy(out,stored_weather,needed);*len=needed;return 0;
+    }
     const bool token = strcmp(key, "pi_token") == 0;
     const bool seal = strcmp(key, "pi_seal") == 0;
     const char *value = seal ? stored_seal : token ? stored_token : stored_url;
@@ -39,6 +47,10 @@ int fake_nvs_get(const char *key, char *out, size_t *len) {
 int fake_nvs_set(const char *key, const char *value) {
     set_count++;
     if (set_count == fail_set_at) return -1;
+    if(!strcmp(key,"weather_private")) {
+        if(strlen(value)>=sizeof stored_weather)return -1;
+        strcpy(stored_weather,value);has_weather=true;return 0;
+    }
     bool token = strcmp(key, "pi_token") == 0;
     bool seal = strcmp(key, "pi_seal") == 0;
     char *dest = seal ? stored_seal : token ? stored_token : stored_url;
@@ -56,7 +68,8 @@ int fake_nvs_set(const char *key, const char *value) {
 
 int fake_nvs_erase(const char *key) {
     if (++erase_count == fail_erase_at) return -1;
-    if (strcmp(key, "pi_seal") == 0) has_seal = false;
+    if(!strcmp(key,"weather_private"))has_weather=false;
+    else if (strcmp(key, "pi_seal") == 0) has_seal = false;
     else if (strcmp(key, "pi_token") == 0) has_token = false;
     else has_url = false;
     return 0;
@@ -190,7 +203,25 @@ static void test_generation_boundaries(void) {
     assert(valve_config_clear());
     assert(valve_config_generation() == generation + 6);
 }
+static void test_private_weather_credential(void) {
+    fake_nvs_reset();
+    char url[VALVE_CONFIG_URL_LEN],token[VALVE_CONFIG_TOKEN_LEN];
+    assert(!valve_config_weather_load(url,sizeof url,token,sizeof token));
+    assert(!valve_config_save_weather("http://pi:8081","display-private","display-private"));
+    assert(valve_config_save_weather("http://pi:8081","display-private","weather-private"));
+    assert(valve_config_weather_load(url,sizeof url,token,sizeof token));
+    assert(!strcmp(token,"weather-private"));
+    assert(valve_config_save_weather("http://pi:8081","new-display-private",""));
+    assert(valve_config_weather_load(url,sizeof url,token,sizeof token) && !strcmp(token,"weather-private"));
+    assert(valve_config_save_weather("http://new-pi:8081","new-display-private",""));
+    assert(!valve_config_weather_load(url,sizeof url,token,sizeof token) && !token[0]);
+    assert(valve_config_save_weather("http://pi:8081","weather-private",""));
+    assert(!valve_config_weather_load(url,sizeof url,token,sizeof token));
+    assert(valve_config_clear());
+    assert(!has_weather);
+}
 int main(void) {
+    test_private_weather_credential();
     test_generation_boundaries();
     test_round_trip();
     test_rejections();

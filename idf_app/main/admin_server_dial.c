@@ -1,5 +1,6 @@
 #include "admin_server_dial.h"
 #include "admin_page_dial.h"
+#include "weather_admin_dial.h"
 #include "cJSON.h"
 #include "esp_netif.h"
 #include "mbedtls/sha256.h"
@@ -369,7 +370,44 @@ static esp_err_t settings_handler(httpd_req_t *req) {
     return settings_reply(req, result, &value);
 }
 
+static esp_err_t weather_handler(httpd_req_t *req) {
+    bool write=req->method==HTTP_PUT;
+    if(!admin_http_authorize(req,write))return ESP_OK;
+    weather_settings_write_t input;weather_settings_view_t output;
+    if(write) {
+        char type[64];
+        if(!header(req,"Content-Type",type,sizeof type) ||
+            (strcmp(type,"application/json")&&strcmp(type,"application/json; charset=utf-8")))
+            return reply(req,"415 Unsupported Media Type","{\"error\":\"content_type\"}");
+        if(req->content_len>WEATHER_BODY_MAX)return reply(req,"413 Content Too Large","{\"error\":\"too_large\"}");
+        if(!req->content_len)return reply(req,"422 Unprocessable Entity","{\"error\":\"invalid\"}");
+        char *body=malloc(req->content_len+1);
+        if(!body)return reply(req,"503 Service Unavailable","{\"error\":\"unavailable\"}");
+        size_t received=0;
+        while(received<req->content_len) {
+            int n=httpd_req_recv(req,body+received,req->content_len-received);
+            if(n<=0)break;
+            received+=(size_t)n;
+        }
+        body[received]=0;
+        bool valid=received==req->content_len && weather_settings_write_parse(body,received,&input);
+        free(body);
+        if(!valid)return reply(req,"422 Unprocessable Entity","{\"error\":\"invalid\"}");
+    }
+    bool ok=write?weather_admin_update(&input,&output):weather_admin_get(&output);
+    /* A session lost while awaiting the worker never receives its result. */
+    if(!admin_http_authorize(req,false))return ESP_OK;
+    if(!ok) {
+        if(output.result==WEATHER_ADMIN_CONFLICT)return reply(req,"409 Conflict","{\"error\":\"conflict\"}");
+        if(output.result==WEATHER_ADMIN_INVALID)return reply(req,"422 Unprocessable Entity","{\"error\":\"invalid\"}");
+        return reply(req,"503 Service Unavailable","{\"error\":\"unavailable\"}");
+    }
+    char body[384];
+    if(!weather_settings_view_json(&output,body,sizeof body))return reply(req,"503 Service Unavailable","{\"error\":\"unavailable\"}");
+    return reply(req,"200 OK",body);
+}
 esp_err_t admin_server_register(httpd_handle_t server) {
+    if(!weather_admin_init())return ESP_FAIL;
     const httpd_uri_t routes[] = {
         {.uri="/admin", .method=HTTP_GET, .handler=shell_handler},
         {.uri="/admin/forms.js", .method=HTTP_GET, .handler=forms_handler},
@@ -380,6 +418,8 @@ esp_err_t admin_server_register(httpd_handle_t server) {
         {.uri="/admin/api/logout", .method=HTTP_POST, .handler=auth_handler},
         {.uri="/admin/api/pin", .method=HTTP_POST, .handler=auth_handler},
         {.uri="/admin/api/recovery-code", .method=HTTP_POST, .handler=auth_handler},
+        {.uri="/admin/api/weather", .method=HTTP_GET, .handler=weather_handler},
+        {.uri="/admin/api/weather", .method=HTTP_PUT, .handler=weather_handler},
         {.uri="/admin/api/settings", .method=HTTP_GET, .handler=settings_handler},
         {.uri="/admin/api/shower", .method=HTTP_POST, .handler=settings_handler},
         {.uri="/admin/api/rotation", .method=HTTP_POST, .handler=settings_handler},

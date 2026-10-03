@@ -16,6 +16,7 @@ typedef struct {
     uint32_t request_id;
     uint32_t session;
     uint32_t config_generation;
+    uint32_t weather_generation;
     valve_client_event_kind_t kind;
 } valve_client_event_t;
 typedef void (*valve_client_callback_fn)(const valve_client_event_t *event, void *context);

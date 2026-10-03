@@ -430,6 +430,8 @@ static const char *HTML_VALVES_CONFIG =
     "<form method='POST' action='/valves-config'>"
     "<label>Pi base URL <input type='url' name='pi_url' maxlength='128' required></label>"
     "<label>Display token <input type='password' name='pi_token' maxlength='128' value='' required></label>"
+    "<label>Weather settings token <input type='password' name='weather_token' maxlength='128' value='' autocomplete='new-password'></label>"
+    "<small>Optional distinct weather credential. Leave blank to keep the saved credential.</small>"
     "<button type='submit' name='action' value='save'>Save</button>"
     "<button type='submit' name='action' value='clear' formnovalidate>Clear</button>"
     "</form><p><a href='/'>Back to settings</a></p></body></html>";
@@ -467,8 +469,8 @@ static bool decode_form_value(const char *start, size_t len, char *out, size_t c
     return true;
 }
 
-static bool parse_valves_form(char *body, char *url, char *token, char *action) {
-    bool seen_url = false, seen_token = false, seen_action = false;
+static bool parse_valves_form(char *body, char *url, char *token, char *weather, char *action) {
+    bool seen_url = false, seen_token = false, seen_weather = false, seen_action = false;
     char *item = body;
     while (*item) {
         char *amp = strchr(item, '&');
@@ -484,6 +486,9 @@ static bool parse_valves_form(char *body, char *url, char *token, char *action) 
         } else if (strcmp(item, "pi_token") == 0 && !seen_token) {
             seen_token = decode_form_value(value, len, token, VALVE_CONFIG_TOKEN_LEN);
             if (!seen_token) return false;
+        } else if (strcmp(item, "weather_token") == 0 && !seen_weather) {
+            seen_weather = decode_form_value(value, len, weather, VALVE_CONFIG_TOKEN_LEN);
+            if (!seen_weather) return false;
         } else if (strcmp(item, "action") == 0 && !seen_action) {
             seen_action = decode_form_value(value, len, action, 8);
             if (!seen_action) return false;
@@ -499,6 +504,7 @@ static esp_err_t valves_config_post_handler(httpd_req_t *req) {
     char body[1025] = {0};
     char url[VALVE_CONFIG_URL_LEN] = {0};
     char token[VALVE_CONFIG_TOKEN_LEN] = {0};
+    char weather[VALVE_CONFIG_TOKEN_LEN] = {0};
     char action[8] = {0};
     esp_err_t result = ESP_FAIL;
     if (req->content_len <= 0 || req->content_len >= sizeof(body)) {
@@ -516,12 +522,12 @@ static esp_err_t valves_config_post_handler(httpd_req_t *req) {
         received += (size_t)count;
     }
     body[received] = '\0';
-    if (strlen(body) != received || !parse_valves_form(body, url, token, action)) {
+    if (strlen(body) != received || !parse_valves_form(body, url, token, weather, action)) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid form");
         goto done;
     }
     bool saved = strcmp(action, "clear") == 0 ? valve_config_clear() :
-                 valve_config_save(url, token);
+                 valve_config_save_weather(url, token, weather);
     if (!saved) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
                             "Settings rejected or could not be verified");
@@ -531,6 +537,7 @@ static esp_err_t valves_config_post_handler(httpd_req_t *req) {
     httpd_resp_set_hdr(req, "Location", "/valves-config");
     result = httpd_resp_sendstr(req, "Settings updated");
 done:
+    memset(weather, 0, sizeof(weather));
     memset(token, 0, sizeof(token));
     memset(body, 0, sizeof(body));
     return result;

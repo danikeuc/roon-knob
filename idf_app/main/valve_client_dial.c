@@ -1,5 +1,6 @@
 #include "valve_client_dial.h"
 #include "valve_config_dial.h"
+#include "weather_admin_dial.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdatomic.h>
@@ -13,12 +14,16 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
+#include <esp_random.h>
+#include <inttypes.h>
 #endif
 
 #define RESPONSE_CAP 2048
 #define VALVE_HTTP_STACK_SIZE (12 * 1024)
 #define STATUS_ROUTE "/api/v1/display/status"
 #define START_ROUTE "/api/v1/display/actions/timed-shower"
+#define WEATHER_START_ROUTE "/api/v1/display/actions/start"
+#define WEATHER_STOP_ROUTE "/api/v1/display/actions/stop"
 #define DRAIN_ROUTE "/api/v1/display/actions/drain"
 #define START_MAX_QUEUED_MS UINT64_C(10000)
 
@@ -27,6 +32,7 @@ typedef struct work_item {
     valve_request_t request;
     uint32_t session;
     uint32_t config_generation;
+    uint32_t weather_generation;
     uint32_t request_id;
     uint64_t enqueued_ms;
 } work_item_t;
@@ -88,8 +94,9 @@ uint32_t valve_client_current_session(void) {
 static bool prepare_work(bool post, const valve_request_t *request, work_item_t *work,
                          uint32_t *request_id) {
     if (!work || !request || (post && request->action != VALVE_ACTION_START &&
-        request->action != VALVE_ACTION_DRAIN) ||
-        (post && request->action == VALVE_ACTION_START &&
+        request->action != VALVE_ACTION_DRAIN && request->action != VALVE_ACTION_WEATHER_START &&
+        request->action != VALVE_ACTION_WEATHER_STOP) ||
+        (post && (request->action == VALVE_ACTION_START || request->action == VALVE_ACTION_WEATHER_START) &&
          (request->duration_seconds < 60 || request->duration_seconds > 600 ||
           request->duration_seconds % 60))) return false;
 #ifndef VALVE_CLIENT_HOST_TEST
@@ -101,6 +108,7 @@ static bool prepare_work(bool post, const valve_request_t *request, work_item_t 
         work->request = *request;
         work->session = s_session;
         work->config_generation = valve_config_generation();
+        work->weather_generation = weather_admin_generation();
         work->request_id = ++s_next_request_id;
         work->enqueued_ms = monotonic_ms();
         if (work->request_id == 0) work->request_id = ++s_next_request_id;
@@ -118,10 +126,12 @@ static bool work_allowed(const work_item_t *item) {
     uint32_t current;
     return session_snapshot(&current) && item->session == current &&
            !(item->config_generation & 1u) &&
-           item->config_generation == valve_config_generation();
+           item->config_generation == valve_config_generation() &&
+           (!item->post || item->request.action==VALVE_ACTION_DRAIN || item->weather_generation==weather_admin_generation());
 }
 static bool start_expired(const work_item_t *item) {
-    if (!item || !item->post || item->request.action != VALVE_ACTION_START) return false;
+    if (!item || !item->post || (item->request.action != VALVE_ACTION_START &&
+        item->request.action != VALVE_ACTION_WEATHER_START && item->request.action != VALVE_ACTION_WEATHER_STOP)) return false;
     uint64_t now = monotonic_ms();
     return now < item->enqueued_ms || now - item->enqueued_ms >= START_MAX_QUEUED_MS;
 }
@@ -223,9 +233,30 @@ static valve_client_result_t request(const char *method, const char *route,
     if (http_status == 409) return VALVE_CLIENT_CONFLICT;
     if (http_status >= 500) return VALVE_CLIENT_SERVER_ERROR;
     if (http_status != 200) return VALVE_CLIENT_INVALID;
-    if (parse_status && !valve_status_parse(response, response_len, out))
-        return VALVE_CLIENT_INVALID;
+    if (parse_status) {
+        bool weather_action=!strcmp(route,WEATHER_START_ROUTE)||!strcmp(route,WEATHER_STOP_ROUTE);
+        if (weather_action) {
+            const char *prefix="{\"request_id\":\"";
+            if (!body || strncmp(body,prefix,strlen(prefix))) return VALVE_CLIENT_INVALID;
+            char id[37]; memcpy(id,body+strlen(prefix),36); id[36]=0;
+            if (!valve_action_response_parse(response,response_len,id,out)) return VALVE_CLIENT_INVALID;
+        } else if (!valve_status_parse(response,response_len,out)) return VALVE_CLIENT_INVALID;
+    }
     return VALVE_CLIENT_OK;
+}
+static void action_uuid(char out[37]) {
+    unsigned char bytes[16];
+#ifdef VALVE_CLIENT_HOST_TEST
+    static uint64_t counter;
+    uint64_t value=++counter;
+    memset(bytes,0,sizeof bytes); memcpy(bytes,&value,sizeof value);
+#else
+    esp_fill_random(bytes,sizeof bytes);
+#endif
+    bytes[6]=(bytes[6]&15)|64; bytes[8]=(bytes[8]&63)|128;
+    snprintf(out,37,"%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+        bytes[0],bytes[1],bytes[2],bytes[3],bytes[4],bytes[5],bytes[6],bytes[7],
+        bytes[8],bytes[9],bytes[10],bytes[11],bytes[12],bytes[13],bytes[14],bytes[15]);
 }
 static valve_client_result_t post_snapshot(const valve_request_t *action, valve_status_t *out,
                                            const credentials_t *credentials,
@@ -233,7 +264,36 @@ static valve_client_result_t post_snapshot(const valve_request_t *action, valve_
     if (!out || !action) return VALVE_CLIENT_INVALID;
     memset(out, 0, sizeof *out); out->state = VALVE_UNKNOWN;
     const char *route = action->action == VALVE_ACTION_START ? START_ROUTE :
-                        action->action == VALVE_ACTION_DRAIN ? DRAIN_ROUTE : NULL;
+                        action->action == VALVE_ACTION_DRAIN ? DRAIN_ROUTE :
+                        action->action == VALVE_ACTION_WEATHER_START ? WEATHER_START_ROUTE :
+                        action->action == VALVE_ACTION_WEATHER_STOP ? WEATHER_STOP_ROUTE : NULL;
+    bool weather=action->action==VALVE_ACTION_WEATHER_START || action->action==VALVE_ACTION_WEATHER_STOP;
+    uint64_t began=monotonic_ms();
+    if (weather) {
+        valve_status_t preflight;
+        if (action->action==VALVE_ACTION_WEATHER_START &&
+            (action->duration_seconds<60 || action->duration_seconds>600 || action->duration_seconds%60)) return VALVE_CLIENT_INVALID;
+        valve_client_result_t check=request("GET",STATUS_ROUTE,NULL,0,true,&preflight,credentials);
+        if (check!=VALVE_CLIENT_OK) return check;
+        if (!preflight.weather_assisted || preflight.weather_assistance_version!=1 ||
+            preflight.operation==VALVE_FAULT || !preflight.control_revision_available ||
+            !preflight.action_nonce[0] || (work && !work_allowed(work)) || start_expired(work)) return VALVE_CLIENT_INVALID;
+        if (action->action==VALVE_ACTION_WEATHER_START && preflight.state!=VALVE_DRAIN) return VALVE_CLIENT_INVALID;
+        char id[37],body[256]; action_uuid(id);
+        int n=snprintf(body,sizeof body,"{\"request_id\":\"%s\",\"expected_control_revision\":%llu,\"action_nonce\":\"%s\"",
+            id,(unsigned long long)preflight.control_revision,preflight.action_nonce);
+        if (n<0 || (size_t)n>=sizeof body) return VALVE_CLIENT_INVALID;
+        int tail=action->action==VALVE_ACTION_WEATHER_START ?
+            snprintf(body+n,sizeof body-(size_t)n,",\"duration_seconds\":%u}",action->duration_seconds):
+            snprintf(body+n,sizeof body-(size_t)n,"}");
+        if (tail<0 || (size_t)tail>=sizeof body-(size_t)n || monotonic_ms()<began ||
+            monotonic_ms()-began>=START_MAX_QUEUED_MS || start_expired(work)) return VALVE_CLIENT_TIMEOUT;
+        valve_client_result_t result=request("POST",route,body,(size_t)(n+tail),true,out,credentials);
+        if (monotonic_ms()<began || monotonic_ms()-began>=START_MAX_QUEUED_MS || start_expired(work)) {
+            memset(out,0,sizeof *out); return VALVE_CLIENT_TIMEOUT;
+        }
+        return result;
+    }
     if (!route) return VALVE_CLIENT_INVALID;
     char body[32] = {0}; size_t body_len = 0;
     if (action->action == VALVE_ACTION_START) {
@@ -297,7 +357,7 @@ static void dispatch(const work_item_t *work) {
     if (s_callback) {
         valve_client_event_t event = {.result = result, .status = status,
             .request_id = work->request_id, .session = work->session,
-            .config_generation = work->config_generation,
+            .config_generation = work->config_generation, .weather_generation = work->weather_generation,
             .kind = work->post ? VALVE_CLIENT_EVENT_POST_STATUS : VALVE_CLIENT_EVENT_GET};
         s_callback(&event, s_callback_context);
     }
@@ -309,7 +369,7 @@ static void dispatch(const work_item_t *work) {
         if (s_callback) {
             valve_client_event_t event = {.result = check, .status = reconciled,
                 .request_id = work->request_id, .session = work->session,
-                .config_generation = work->config_generation,
+                .config_generation = work->config_generation, .weather_generation = work->weather_generation,
                 .kind = VALVE_CLIENT_EVENT_RECOVERY_GET};
             s_callback(&event, s_callback_context);
         }

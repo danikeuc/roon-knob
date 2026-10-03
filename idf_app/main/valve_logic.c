@@ -124,6 +124,7 @@ static bool json_well_formed(const char *json, size_t len) {
     json_space(&c);
     return c.pos == len;
 }
+bool valve_json_object_valid(const char *json,size_t length) { return json && json_well_formed(json,length); }
 static bool equal_token(const char *json, const jsmntok_t *tok, const char *value) {
     size_t n = (size_t)(tok->end - tok->start);
     return tok->type == JSMN_STRING && strlen(value) == n &&
@@ -142,7 +143,7 @@ static bool equal_optional_key(const char *json, const jsmntok_t *tok, const cha
                 unsigned char hex = (unsigned char)json[p++];
                 if (!json_hex((char)hex)) return false;
                 codepoint = codepoint * 16u +
-                    (hex <= '9' ? hex - '0' : (hex <= 'F' ? hex - 'A' : hex - 'a') + 10u);
+                    (hex <= '9' ? (unsigned)(hex - '0') : (unsigned)(hex <= 'F' ? hex - 'A' : hex - 'a') + 10u);
             }
             if (codepoint != *expected) return false;
         } else if (ch != *expected) return false;
@@ -174,6 +175,19 @@ static bool number_token(const char *json, const jsmntok_t *tok, uint16_t *value
     }
     *value = (uint16_t)result;
     return true;
+}
+static bool revision_token(const char *json, const jsmntok_t *tok, uint64_t *value) {
+    if (tok->type != JSMN_PRIMITIVE || tok->start == tok->end) return false;
+    uint64_t result = 0;
+    for (int i=tok->start; i<tok->end; ++i) {
+        unsigned char c=(unsigned char)json[i];
+        if (c<'0' || c>'9' || result > (VALVE_MAX_REVISION - (c-'0'))/10) return false;
+        result=result*10+(c-'0');
+    }
+    *value=result; return true;
+}
+static bool null_token(const char *json, const jsmntok_t *tok) {
+    return tok->type==JSMN_PRIMITIVE && tok->end-tok->start==4 && !memcmp(json+tok->start,"null",4);
 }
 static bool temperature_token(const char *json, const jsmntok_t *tok, float *value) {
     enum { TEMPERATURE_TOKEN_MAX = 48 };
@@ -211,7 +225,8 @@ bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
     float temperature = 0.0f;
     int previous_end = tokens[0].start + 1;
     bool first = true;
-    bool mode = false, drain_state = false, supply_state = false;
+    bool mode = false, drain_state = false, supply_state = false, auto_state = false, fault_state = false;
+    unsigned weather_seen = 0;
     bool drain_command = false, supply_command = false;
     uint16_t remaining = 0;
     char reason[sizeof out->reason] = {0};
@@ -227,10 +242,15 @@ bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
         } else if (!gap(json, previous_end, key_open, ',')) return false;
         if (!gap(json, key->end + 1, value_open, ':')) return false;
         unsigned bit = 0;
-        if (equal_token(json, key, "mode")) { bit = 1; mode = equal_token(json, val, "manual_timed"); }
+        if (equal_optional_key(json, key, "mode")) {
+            bit = 1; mode = equal_token(json, val, "manual_timed");
+            out->weather_assisted = equal_token(json, val, "weather_assisted");
+        }
         else if (equal_token(json, key, "state")) {
             bit = 2; drain_state = equal_token(json, val, "MANUAL_DRAIN");
             supply_state = equal_token(json, val, "TIMED_SHOWER");
+            auto_state = equal_token(json, val, "AUTO_SUPPLY");
+            fault_state = equal_token(json, val, "FAULT");
         } else if (equal_token(json, key, "command")) {
             bit = 4; drain_command = equal_token(json, val, "DRAIN");
             supply_command = equal_token(json, val, "SUPPLY");
@@ -241,6 +261,36 @@ bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
             memcpy(reason, json + val->start, n); reason[n] = 0;
         } else if (equal_token(json, key, "remaining_seconds")) {
             bit = 16; if (!number_token(json, val, &remaining)) return false;
+        } else if (equal_optional_key(json, key, "weather_assistance_version")) {
+            if (weather_seen & 1) return false;
+            weather_seen |= 1;
+            uint64_t version;
+            if (!revision_token(json,val,&version) || version != 1) return false;
+            out->weather_assistance_version = 1;
+        } else if (equal_optional_key(json, key, "operation")) {
+            if (weather_seen & 2) return false;
+            weather_seen |= 2;
+            const char *names[] = {"", "MANUAL_IDLE", "MANUAL_ACTIVE", "AUTO_SUPPLY", "USER_OFF", "FAULT"};
+            for (unsigned op=1; op<6; ++op) if (equal_token(json,val,names[op])) out->operation=(valve_operation_t)op;
+            if (out->operation == VALVE_OPERATION_UNKNOWN) return false;
+        } else if (equal_optional_key(json, key, "control_revision")) {
+            if (weather_seen & 4) return false;
+            weather_seen |= 4;
+            if (!null_token(json,val)) {
+                if (!revision_token(json,val,&out->control_revision)) return false;
+                out->control_revision_available = true;
+            }
+        } else if (equal_optional_key(json, key, "action_nonce")) {
+            if (weather_seen & 8) return false;
+            weather_seen |= 8;
+            if (!null_token(json,val)) {
+                if (val->type!=JSMN_STRING || val->end-val->start!=43) return false;
+                for (int n=val->start; n<val->end; ++n) {
+                    char c=json[n];
+                    if (!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c=='-')) return false;
+                }
+                memcpy(out->action_nonce,json+val->start,43);
+            }
         } else if (equal_optional_key(json, key, "pipe_temperature_c")) {
             if (temperature_seen) temperature_valid = false;
             else temperature_valid = temperature_token(json, val, &temperature);
@@ -263,8 +313,17 @@ bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
     }
     for (int p = previous_end; p < tokens[0].end - 1; p++)
         if (!isspace((unsigned char)json[p])) return false;
-    if (seen != 31 || !mode) return false;
-    if (drain_state && drain_command && remaining == 0) out->state = VALVE_DRAIN;
+    if (seen != 31 || (!mode && !out->weather_assisted)) return false;
+    if (out->weather_assisted) {
+        if (weather_seen != 15 || out->weather_assistance_version != 1) return false;
+        if (out->operation!=VALVE_FAULT && !out->control_revision_available) return false;
+        bool drain_op=out->operation==VALVE_MANUAL_IDLE || out->operation==VALVE_USER_OFF;
+        if (drain_op && drain_state && drain_command && remaining==0) out->state=VALVE_DRAIN;
+        else if (out->operation==VALVE_MANUAL_ACTIVE && supply_state && supply_command && remaining>0) out->state=VALVE_SUPPLY;
+        else if (out->operation==VALVE_AUTO_SUPPLY && auto_state && supply_command && remaining==0) out->state=VALVE_SUPPLY;
+        else if (out->operation==VALVE_FAULT && fault_state && drain_command && remaining==0) out->state=VALVE_UNKNOWN;
+        else return false;
+    } else if (drain_state && drain_command && remaining == 0) out->state = VALVE_DRAIN;
     else if (supply_state && supply_command && remaining > 0) out->state = VALVE_SUPPLY;
     else return false;
     out->remaining_seconds = remaining;
@@ -275,6 +334,29 @@ bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
         out->temperature_available = true;
     }
     return true;
+}
+
+bool valve_action_response_parse(const char *json, size_t len, const char *request_id, valve_status_t *out) {
+    if (!out) return false;
+    memset(out,0,sizeof *out);
+    if (!json || !request_id || !json_well_formed(json,len)) return false;
+    jsmntok_t tokens[STATUS_MAX_TOKENS]; jsmn_parser parser; jsmn_init(&parser);
+    int count=jsmn_parse(&parser,json,len,tokens,STATUS_MAX_TOKENS), nested=-1;
+    if (count<1 || tokens[0].type!=JSMN_OBJECT) return false;
+    unsigned seen=0;
+    for (int i=1; i<count && tokens[i].start<tokens[0].end;) {
+        if (tokens[i].type!=JSMN_STRING || i+1>=count) return false;
+        const jsmntok_t *key=&tokens[i], *val=&tokens[i+1]; unsigned bit=0;
+        if (equal_optional_key(json,key,"request_id")) { bit=1; if (!equal_token(json,val,request_id)) return false; }
+        else if (equal_optional_key(json,key,"accepted")) { bit=2; if (val->type!=JSMN_PRIMITIVE || val->end-val->start!=4 || memcmp(json+val->start,"true",4)) return false; }
+        else if (equal_optional_key(json,key,"control_revision")) { uint64_t revision; bit=4; if (!revision_token(json,val,&revision)) return false; }
+        else if (equal_optional_key(json,key,"status")) { bit=8; nested=i+1; if (val->type!=JSMN_OBJECT) return false; }
+        else return false;
+        if (seen&bit) return false;
+        seen|=bit; i=next_token(tokens,count,i+1);
+    }
+    return seen==15 && nested>=0 && valve_status_parse(json+tokens[nested].start,
+        (size_t)(tokens[nested].end-tokens[nested].start),out);
 }
 
 void valve_temperature_format(const valve_status_t *status, char *buffer, size_t buffer_size) {
