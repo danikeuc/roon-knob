@@ -193,7 +193,7 @@ bool controller_config_capture_endpoint_token(controller_config_endpoint_token_t
 bool bridge_client_get_current_zone_id(char *out,size_t capacity){assert(capacity>=6);strcpy(out,atomic_load(&changed_zone)?"other-zone":"sauna");return true;}
 void esp_fill_random(void *out,size_t length){memset(out,1,length);}
 static char private_blob[260];
-esp_err_t nvs_open(const char *name,int mode,nvs_handle_t *out){(void)mode;assert(!strcmp(name,"playlist_private"));*out=1;return ESP_OK;}
+esp_err_t nvs_open(const char *name,int mode,nvs_handle_t *out){(void)mode;assert(strlen(name)<NVS_NS_NAME_MAX_SIZE&&!strcmp(name,"playlist_priv"));*out=1;return ESP_OK;}
 esp_err_t nvs_set_blob(nvs_handle_t handle,const char *key,const void *value,size_t size){(void)handle;assert(!strcmp(key,"credential")&&size<=sizeof private_blob);memcpy(private_blob,value,size);return ESP_OK;}
 esp_err_t nvs_get_blob(nvs_handle_t handle,const char *key,void *value,size_t *size){(void)handle;assert(!strcmp(key,"credential"));size_t length=strlen(private_blob)+1;if(length>*size)return 1;memcpy(value,private_blob,length);*size=length;return ESP_OK;}
 esp_err_t nvs_commit(nvs_handle_t handle){(void)handle;return ESP_OK;}

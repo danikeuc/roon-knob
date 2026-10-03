@@ -6,6 +6,7 @@ trap 'rm -rf "$task_tmp"' EXIT
 cc -std=c11 -Wall -Wextra -Werror -Icommon tests/test_controller_playlist.c common/controller_playlist.c -o "$task_tmp/state"
 "$task_tmp/state"
 idf="${IDF_PATH:-/tmp/esp-idf-5.5.5}"
+sh scripts/test_playlist_nvs.sh
 for suite in admin client binding; do
  cc -std=c11 -Wall -Wextra -Werror -DPLAYLIST_HOST_TEST -Icommon -Iinclude -Iidf_app/main -I"$idf/components/json/cJSON" \
  "tests/playlist_dial/test_playlist_$suite.c" common/controller_playlist.c idf_app/main/playlist_client_dial.c idf_app/main/playlist_admin_dial.c \

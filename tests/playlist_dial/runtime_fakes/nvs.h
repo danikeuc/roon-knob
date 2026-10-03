@@ -1,4 +1,5 @@
 #pragma once
+#define NVS_NS_NAME_MAX_SIZE 16
 #include "esp_err.h"
 #include <stddef.h>
 typedef unsigned nvs_handle_t;

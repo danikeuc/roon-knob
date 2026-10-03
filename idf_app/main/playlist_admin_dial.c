@@ -11,6 +11,8 @@
 #include <math.h>
 #ifndef PLAYLIST_HOST_TEST
 #include "nvs.h"
+static const char private_namespace[] = "playlist_priv";
+_Static_assert(sizeof private_namespace <= NVS_NS_NAME_MAX_SIZE, "playlist NVS namespace exceeds IDF limit");
 #endif
 static atomic_uint private_generation;
 uint32_t playlist_private_generation(void){return atomic_load(&private_generation);}
@@ -126,7 +128,7 @@ bool playlist_private_save(const char *base,const char *token) {
 #ifdef PLAYLIST_HOST_TEST
  strcpy(private_blob,blob);ok=true;
 #else
- nvs_handle_t handle;if(nvs_open("playlist_private",NVS_READWRITE,&handle)==ESP_OK){ok=nvs_set_blob(handle,"credential",blob,strlen(blob)+1)==ESP_OK&&nvs_commit(handle)==ESP_OK;nvs_close(handle);}
+ nvs_handle_t handle;if(nvs_open(private_namespace,NVS_READWRITE,&handle)==ESP_OK){ok=nvs_set_blob(handle,"credential",blob,strlen(blob)+1)==ESP_OK&&nvs_commit(handle)==ESP_OK;nvs_close(handle);}
 #endif
  ok=ok&&playlist_private_load(base,verify,sizeof verify)&&!strcmp(token,verify);memset(blob,0,sizeof blob);memset(verify,0,sizeof verify);atomic_fetch_add(&private_generation,1);return ok;
 }
@@ -136,7 +138,7 @@ bool playlist_private_load(const char *base,char *token,size_t cap) {
 #ifdef PLAYLIST_HOST_TEST
  strcpy(blob,private_blob);ok=*blob!=0;
 #else
- nvs_handle_t handle;if(nvs_open("playlist_private",NVS_READONLY,&handle)==ESP_OK){size_t size=sizeof blob;ok=nvs_get_blob(handle,"credential",blob,&size)==ESP_OK&&size>0&&size<=sizeof blob&&blob[size-1]==0&&strlen(blob)+1==size;nvs_close(handle);}
+ nvs_handle_t handle;if(nvs_open(private_namespace,NVS_READONLY,&handle)==ESP_OK){size_t size=sizeof blob;ok=nvs_get_blob(handle,"credential",blob,&size)==ESP_OK&&size>0&&size<=sizeof blob&&blob[size-1]==0&&strlen(blob)+1==size;nvs_close(handle);}
 #endif
  char *p=ok?strchr(blob,'\n'):NULL;if(p){*p++=0;ok=!strcmp(base,blob)&&strlen(p)<cap;if(ok)strcpy(token,p);}else ok=false;memset(blob,0,sizeof blob);return ok;
 }
