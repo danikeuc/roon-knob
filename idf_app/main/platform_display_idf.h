@@ -37,3 +37,5 @@ void platform_display_cancel_input(void);
 void platform_display_set_rotation(uint16_t degrees);
 
 #endif // PLATFORM_DISPLAY_IDF_H
+
+void platform_display_playlist_transition(void);

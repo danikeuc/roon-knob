@@ -4,6 +4,7 @@
 
 #include "config_server.h"
 #include "admin_server_dial.h"
+#include "playlist_admin_dial.h"
 #include <stdio.h>
 #include "valve_config_dial.h"
 #include "controller_config.h"
@@ -109,6 +110,8 @@ static const char *HTML_CONFIG =
     "<label>Unified Hi-Fi Control URL</label>"
     "<input type='url' name='bridge' maxlength='128' placeholder='http://192.168.1.x:8088' value='%s'>"
     "<p class='hint'>Leave empty for mDNS auto-discovery. Check the HiPhi Dial display for connection progress.</p>"
+    "<label>Playlist device token</label><input type='password' name='playlist_token' maxlength='128' value='' autocomplete='new-password'>"
+    "<p class='hint'>Optional private playlist credential. Blank keeps the saved token, bound to this bridge URL.</p>"
     "<input type='submit' value='Save'>"
     "<input type='submit' name='action' value='Clear' class='btn-clear' formnovalidate>"
     "</form></body></html>";
@@ -344,11 +347,27 @@ static esp_err_t config_get_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+static bool playlist_form_token(const char *body,char token[129]) {
+    token[0]=0;bool found=false;
+    for(const char *field=body;field&&*field;){const char *end=strchr(field,'&');if(!end)end=field+strlen(field);const char *equal=memchr(field,'=',(size_t)(end-field));
+        if(equal&&(size_t)(equal-field)==14&&!memcmp(field,"playlist_token",14)){
+            if(found)return false;
+            found=true;size_t len=(size_t)(end-equal-1);if(len>384)return false;
+            char encoded[385];memcpy(encoded,equal+1,len);encoded[len]=0;
+            size_t used=0;for(size_t i=0;i<len;i++){unsigned char c=(unsigned char)encoded[i];if(c=='%'){if(i+2>=len)return false;char h[3]={encoded[i+1],encoded[i+2],0};char *tail;unsigned long value=strtoul(h,&tail,16);if(*tail)return false;c=(unsigned char)value;i+=2;}else if(c=='+')c=' ';if(!c||used>=128)return false;token[used++]=(char)c;}token[used]=0;
+        }
+        field=*end?end+1:NULL;
+    }
+    return true;
+}
+
 // Handler for POST /config - save settings
 static esp_err_t config_post_handler(httpd_req_t *req) {
     if (!admin_http_authorize(req, true)) return ESP_OK;
-    char buf[256] = {0};
-    int received = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    char buf[1024] = {0};
+    if(req->content_len>=sizeof buf){httpd_resp_send_err(req,HTTPD_400_BAD_REQUEST,"Form too large");return ESP_FAIL;}
+    size_t received=0;while(received<req->content_len){int n=httpd_req_recv(req,buf+received,req->content_len-received);if(n<=0)break;received+=(size_t)n;}
+    if(received!=req->content_len||memchr(buf,0,received)){httpd_resp_send_err(req,HTTPD_400_BAD_REQUEST,"Invalid form");return ESP_FAIL;}
 
     if (received <= 0) {
         ESP_LOGE(TAG, "Failed to receive POST data");
@@ -358,6 +377,8 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
     buf[received] = '\0';
     /* This route can receive arbitrary form fields. Never log its raw body. */
 
+    char playlist_token[129];
+    if(!playlist_form_token(buf,playlist_token)){memset(buf,0,sizeof buf);httpd_resp_send_err(req,HTTPD_400_BAD_REQUEST,"Invalid credential form");return ESP_FAIL;}
     // Check if Clear button was pressed
     char action[16] = {0};
     get_form_field(buf, "action", action, sizeof(action));
@@ -401,6 +422,9 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
         return send_unverified_settings(req);
     }
 
+    bool credential_ok=playlist_private_save(bridge_base,playlist_token);
+    memset(playlist_token,0,sizeof playlist_token);memset(buf,0,sizeof buf);
+    if(!credential_ok){httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"Bridge saved; playlist credential not confirmed");return ESP_FAIL;}
     // Send success response
     char *html = heap_caps_malloc(1024,
                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);

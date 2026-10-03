@@ -15,6 +15,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 httpd_uri_t routes[40];
+static int fixture_route_capacity=40;
 int route_count,fail_registration=-1,reads,writes,auth_queries,auth_mutations;
 char fixture_logs[8192];
 bool configured,valid_session,storage_error;
@@ -36,6 +37,7 @@ void fixture_reset(void) {
     fixture_logs[0]=0;
     fixture_socket_ipv6=false;
     fixture_socket_address="192.168.4.1";
+    fixture_route_capacity=40;
     route_count=reads=writes=auth_queries=auth_mutations=elapsed=0;
     fail_registration=-1;
     configured=true;
@@ -65,6 +67,7 @@ int fixture_status(const httpd_req_t *r) {
     return r->status[0]?atoi(r->status):200;
 }
 esp_err_t httpd_start(httpd_handle_t *h,const httpd_config_t*c) {
+    fixture_route_capacity=c->max_uri_handlers;
     assert(c->max_uri_handlers>=route_count);
     *h=(void*)1;
     return 0;
@@ -77,6 +80,7 @@ esp_err_t httpd_stop(httpd_handle_t h) {
 esp_err_t httpd_register_uri_handler(httpd_handle_t h,const httpd_uri_t*u) {
     (void)h;
     if(route_count==fail_registration)return ESP_FAIL;
+    assert(route_count<fixture_route_capacity);
     routes[route_count++]=*u;
     return 0;
 }

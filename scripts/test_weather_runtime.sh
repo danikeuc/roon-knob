@@ -15,7 +15,7 @@ cc -std=c11 -Wall -Wextra -Werror -pthread \
     -I"$idf/components/json/cJSON" -I"$idf/components/mbedtls/mbedtls/include" -I"$idf/components/mbedtls/mbedtls/library" \
     -Iidf_app/main -Iinclude -Icommon -Icomponents/rk_ble_hid_host/include \
     tests/weather_runtime/test_weather_worker.c tests/weather_runtime/runtime_fixture.c tests/admin_dial/http_fixture.c \
-    idf_app/main/weather_admin_dial.c idf_app/main/valve_logic.c idf_app/main/admin_server_dial.c \
+    idf_app/main/weather_admin_dial.c idf_app/main/valve_logic.c idf_app/main/admin_server_dial.c tests/playlist_dial/admin_runtime_stub.c \
     "$idf/components/json/cJSON/cJSON.c" "$idf/components/mbedtls/mbedtls/library/sha256.c" \
     "$idf/components/mbedtls/mbedtls/library/platform_util.c" -lm -o "$tmp_dir/worker"
 if [ "${1:-all}" != action ]; then "$tmp_dir/worker"; fi

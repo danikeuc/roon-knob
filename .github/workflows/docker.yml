@@ -70,6 +70,8 @@ jobs:
             frame_app/main/platform_provisioning_frame.c \
             -o /tmp/test-provisioning-adapter-frame
           /tmp/test-provisioning-adapter-frame
+          cc -std=c11 -Wall -Wextra -Werror -Icommon tests/test_controller_playlist.c common/controller_playlist.c -o /tmp/test-controller-playlist
+          /tmp/test-controller-playlist
           sh tests/run_wifi_provisioning_lifecycle.sh
           cc -std=c11 -Wall -Wextra -Werror -pedantic -pthread \
             -Icommon -Iinclude \
@@ -307,7 +309,8 @@ jobs:
             cd ..;
             test -f "$IDF_PATH/components/mbedtls/mbedtls/library/pkcs5.c";
             sh scripts/test_admin_dial.sh;
-            sh scripts/test_valve_dial.sh
+            sh scripts/test_valve_dial.sh;
+            sh scripts/test_playlist_dial.sh
 
   build-idf:
     name: build-idf

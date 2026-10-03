@@ -73,6 +73,7 @@ static lv_obj_t *s_play_icon;          // Play/pause icon label
 static lv_obj_t *s_background;         // Light background container
 
 // Artwork layers
+static lv_obj_t *s_playlist_header;
 static lv_obj_t *s_artwork_container;  // Container for artwork layers
 static lv_obj_t *s_artwork_image;      // Album art image
 static lv_obj_t *s_ui_container;       // Container for all UI widgets
@@ -129,6 +130,34 @@ static char s_last_image_key[128] = "";  // Track last loaded artwork
 static float s_last_predicted_volume = -9999.0f;  // Track user's predicted volume for emphasis suppression
 #ifdef ESP_PLATFORM
 static ui_jpeg_image_t s_artwork_img;  // Decoded RGB565 image for artwork (ESP32)
+#if defined(RK_CUSTOM_VALVE_FIRMWARE) && RK_CUSTOM_VALVE_FIRMWARE
+#include "controller_config.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
+#include <stdatomic.h>
+typedef struct { char url[512],key[128],zone[129];uint32_t generation,endpoint_generation; } artwork_request_t;
+static QueueHandle_t artwork_jobs;
+static atomic_uint artwork_generation;
+static atomic_flag artwork_lock=ATOMIC_FLAG_INIT;
+static struct { bool ready;artwork_request_t request;char *pixels; } artwork_result;
+static char artwork_requested[128];
+static bool artwork_current(void *context) {
+    artwork_request_t *r=context;controller_config_endpoint_token_t endpoint;char zone[129];
+    return r->generation==atomic_load(&artwork_generation)&&controller_config_capture_endpoint_token(&endpoint)&&endpoint.generation==r->endpoint_generation&&bridge_client_get_current_zone_id(zone,sizeof zone)&&!strcmp(zone,r->zone)&&bridge_client_is_bridge_connected();
+}
+static void artwork_worker(void *unused) {
+    (void)unused;artwork_request_t request;
+    for(;;)if(xQueueReceive(artwork_jobs,&request,portMAX_DELAY)==pdTRUE){
+        while(atomic_flag_test_and_set(&artwork_lock)){}char *previous=artwork_result.pixels;artwork_result.pixels=NULL;artwork_result.ready=false;atomic_flag_clear(&artwork_lock);free(previous);
+        char *pixels=NULL;size_t length=0;
+        if(platform_http_get_dial_artwork(request.url,&pixels,&length,artwork_current,&request)!=0||!artwork_current(&request)){free(pixels);continue;}
+        while(atomic_flag_test_and_set(&artwork_lock)){}artwork_result.request=request;artwork_result.pixels=pixels;artwork_result.ready=true;atomic_flag_clear(&artwork_lock);
+    }
+}
+static void artwork_init(void){artwork_jobs=xQueueCreate(1,sizeof(artwork_request_t));if(!artwork_jobs||xTaskCreate(artwork_worker,"dial_artwork",4096,NULL,2,NULL)!=pdPASS){if(artwork_jobs)vQueueDelete(artwork_jobs);artwork_jobs=NULL;}}
+#endif
+
 #else
 static char *s_artwork_data = NULL;  // Raw JPEG data for PC simulator
 #endif
@@ -215,6 +244,9 @@ static inline int calculate_volume_percentage(float volume, float volume_min, fl
 // ============================================================================
 
 void ui_init(void) {
+#if defined(RK_CUSTOM_VALVE_FIRMWARE) && RK_CUSTOM_VALVE_FIRMWARE
+    artwork_init();
+#endif
     // Don't use theme - it causes ugly color overrides
     // We'll style everything manually for full control
 
@@ -377,6 +409,7 @@ static void build_layout(void) {
     // Header group - battery + zone at top (flex column, explicit position)
     // ========================================================================
     lv_obj_t *header = lv_obj_create(s_ui_container);
+    s_playlist_header=header;
     lv_obj_set_size(header, SCREEN_SIZE - 60, 95);  // Tall tap zone extending toward volume
     lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(header, 0, 0);
@@ -1222,6 +1255,14 @@ void ui_test_pattern(void) {
 }
 
 void ui_set_artwork(const char *image_key) {
+#if defined(RK_CUSTOM_VALVE_FIRMWARE) && RK_CUSTOM_VALVE_FIRMWARE
+    if(!image_key||!*image_key){atomic_fetch_add(&artwork_generation,1);artwork_requested[0]=0;s_last_image_key[0]=0;if(s_artwork_image)lv_obj_add_flag(s_artwork_image,LV_OBJ_FLAG_HIDDEN);return;}
+    if(strlen(image_key)>=sizeof artwork_requested||!artwork_jobs||!strcmp(image_key,artwork_requested))return;
+    artwork_request_t request={0};controller_config_endpoint_token_t endpoint;
+    if(!controller_config_capture_endpoint_token(&endpoint)||!bridge_client_get_current_zone_id(request.zone,sizeof request.zone)||!bridge_client_get_artwork_url(request.url,sizeof request.url,360,360))return;
+    request.generation=atomic_fetch_add(&artwork_generation,1)+1;request.endpoint_generation=endpoint.generation;strcpy(request.key,image_key);strcpy(artwork_requested,image_key);
+    xQueueOverwrite(artwork_jobs,&request);return;
+#endif
     // Check if image_key changed
     if (!image_key || !image_key[0]) {
         // No artwork - hide image
@@ -1515,4 +1556,23 @@ void ui_set_valve_active(bool active) {
     if (!s_valve_indicator) return;
     if (active && s_controls_visible) lv_obj_clear_flag(s_valve_indicator, LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(s_valve_indicator, LV_OBJ_FLAG_HIDDEN);
+}
+
+bool ui_playlist_touch_allowed(int x,int y) {
+    if(!s_controls_visible || x<30 || x>=SCREEN_SIZE-30 || y<124 || y>=SCREEN_SIZE-30)return false;
+    const lv_obj_t *objects[]={s_playlist_header,s_btn_prev,s_btn_play,s_btn_next};
+    for(unsigned i=0;i<4;i++)if(objects[i]){lv_area_t a;lv_obj_get_coords(objects[i],&a);if(x>=a.x1&&x<=a.x2&&y>=a.y1&&y<=a.y2)return false;}
+    return true;
+}
+
+void ui_artwork_process(void) {
+#if defined(RK_CUSTOM_VALVE_FIRMWARE) && RK_CUSTOM_VALVE_FIRMWARE
+    if(atomic_flag_test_and_set(&artwork_lock))return;
+    bool ready=artwork_result.ready;artwork_request_t request=artwork_result.request;char *pixels=artwork_result.pixels;
+    artwork_result.ready=false;artwork_result.pixels=NULL;atomic_flag_clear(&artwork_lock);
+    if(ready&&pixels&&artwork_current(&request)&&ui_rgb565_from_buffer((const uint8_t *)pixels,360,360,&s_artwork_img)){
+        lv_image_set_src(s_artwork_image,&s_artwork_img.dsc);lv_obj_clear_flag(s_artwork_image,LV_OBJ_FLAG_HIDDEN);lv_obj_set_size(s_artwork_image,360,360);lv_obj_center(s_artwork_image);lv_obj_invalidate(s_artwork_image);strcpy(s_last_image_key,request.key);
+    }
+    free(pixels);
+#endif
 }

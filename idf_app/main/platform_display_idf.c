@@ -2,6 +2,7 @@
 #include "platform/platform_display.h"
 #include "display_sleep.h"
 #include "valve_ui_dial.h"
+#include "playlist_ui_dial.h"
 #include "valve_logic.h"
 #include "display_rotation_dial.h"
 #include "admin_settings_dial.h"
@@ -362,11 +363,15 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
         data->point.x = x;
         data->point.y = y;
         if (s_touch_wake || display_is_touch_suppressed()) {
+            playlist_ui_cancel();
             data->state = LV_INDEV_STATE_RELEASED;
             return;
         }
         int dx = (int)x - s_touch_start_x;
         int dy = (int)y - s_touch_start_y;
+        if(!s_touch_started_on_valve && playlist_ui_touch(x,y,true,abs(dx)>20||abs(dy)>20,now_ms)) {
+            s_touch_consumed=true;data->state=LV_INDEV_STATE_RELEASED;lv_indev_reset(indev,NULL);return;
+        }
         valve_gesture_context_t context = {
             .zone_picker = ui_is_zone_picker_visible(),
             .settings = ui_is_settings_visible(),
@@ -401,6 +406,9 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
     uint32_t elapsed = now_ms - (uint32_t)s_touch_start_time;
     int dx = s_touch_last_x - s_touch_start_x;
     int dy = s_touch_last_y - s_touch_start_y;
+    bool playlist_consumed=!s_touch_started_on_valve && !s_touch_wake &&
+        playlist_ui_touch(s_touch_last_x,s_touch_last_y,false,abs(dx)>20||abs(dy)>20,now_ms);
+    if(playlist_consumed)s_touch_consumed=true;
     valve_gesture_context_t context = {
         .zone_picker = ui_is_zone_picker_visible(),
         .settings = ui_is_settings_visible(),
@@ -641,6 +649,7 @@ void platform_display_process_pending(void) {
 }
 
 void platform_display_cancel_input(void) {
+    playlist_ui_cancel();
     valve_ui_cancel_touch();
     if (s_touch_indev) lv_indev_reset(s_touch_indev, NULL);
     s_touch_tracking = false;
@@ -687,4 +696,10 @@ bool platform_battery_is_charging(void) {
 
 int platform_battery_get_level(void) {
     return battery_get_percentage();
+}
+
+void platform_display_playlist_transition(void) {
+    if(s_touch_indev)lv_indev_reset(s_touch_indev,NULL);
+    s_last_tap_time=0;s_pending_art_mode=false;s_pending_exit_art_mode=false;s_pending_page_switch=false;
+    /* Opening is already owned by playlist_ui_touch through its release. */
 }

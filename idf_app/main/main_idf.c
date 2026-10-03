@@ -17,6 +17,9 @@
 #include "wifi_manager.h"
 #include "valve_client_dial.h"
 #include "valve_ui_dial.h"
+#include "playlist_client_dial.h"
+#include "playlist_ui_dial.h"
+#include "controller_action_router.h"
 #include "admin_settings_dial.h"
 
 #include "lvgl.h"
@@ -168,6 +171,7 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
     switch (evt) {
     case RK_NET_EVT_CONNECTING: {
         valve_client_on_disconnect();
+        playlist_client_connected(false);
         valve_ui_connected(false);
         int retry = wifi_mgr_get_retry_count();
         ESP_LOGI(TAG, "WiFi: Connecting... (retry %d)", retry);
@@ -181,6 +185,7 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
 
     case RK_NET_EVT_GOT_IP:
         valve_client_on_reconnect();
+        playlist_client_connected(true);
         valve_ui_connected(true);
         ESP_LOGI(TAG, "WiFi connected with IP: %s", ip_opt ? ip_opt : "unknown");
         stop_wifi_msg_alternation();
@@ -200,6 +205,7 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
     case RK_NET_EVT_NO_AP_FOUND:
     case RK_NET_EVT_AUTH_TIMEOUT: {
         valve_client_on_disconnect();
+        playlist_client_connected(false);
         valve_ui_connected(false);
         int attempt = wifi_mgr_get_retry_count();
         int max = wifi_mgr_get_retry_max();
@@ -212,6 +218,7 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
 
     case RK_NET_EVT_AP_STARTED:
         valve_client_on_disconnect();
+        playlist_client_connected(false);
         valve_ui_connected(false);
         ESP_LOGI(TAG, "WiFi: AP mode started (SSID: hiphi-dial-setup)");
         stop_wifi_msg_alternation();
@@ -248,6 +255,8 @@ static void ui_loop_task(void *arg) {
         admin_settings_process_ui();
         platform_display_process_pending();
 
+        playlist_ui_process();
+        ui_artwork_process();
         valve_ui_process((uint32_t)(esp_timer_get_time() / 1000), !display_is_sleeping());
 
         // Run LVGL task handler
@@ -361,11 +370,13 @@ void app_main(void) {
     ESP_LOGI(TAG, "Initializing UI...");
     ui_init();
     valve_ui_init();
+    if(!playlist_client_init())ESP_LOGW(TAG,"Playlist worker unavailable");
     log_lvgl_memory("after UI initialization");
     log_memory("after UI initialization");
 
     // Install the controller action handler before input can be processed.
     app_controller_init();
+    controller_action_router_set_playlist_handler(playlist_ui_rotate);
 
     // Initialize input (rotary encoder)
     platform_input_init();

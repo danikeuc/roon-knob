@@ -1,6 +1,7 @@
 #include "admin_server_dial.h"
 #include "admin_page_dial.h"
 #include "weather_admin_dial.h"
+#include "playlist_admin_dial.h"
 #include "cJSON.h"
 #include "esp_netif.h"
 #include "mbedtls/sha256.h"
@@ -406,6 +407,33 @@ static esp_err_t weather_handler(httpd_req_t *req) {
     if(!weather_settings_view_json(&output,body,sizeof body))return reply(req,"503 Service Unavailable","{\"error\":\"unavailable\"}");
     return reply(req,"200 OK",body);
 }
+static esp_err_t playlist_handler(httpd_req_t *req) {
+    bool write=req->method==HTTP_PUT;
+    if(!admin_http_authorize(req,write))return ESP_OK;
+    char *result=NULL;size_t length=0;int status=503;
+    if(write) {
+        char type[64];
+        if(!header(req,"Content-Type",type,sizeof type) || (strcmp(type,"application/json")&&strcmp(type,"application/json; charset=utf-8")))return reply(req,"415 Unsupported Media Type","{\"error\":\"content_type\"}");
+        if(req->content_len>PLAYLIST_BODY_MAX)return reply(req,"413 Content Too Large","{\"error\":\"too_large\"}");
+        if(!req->content_len)return reply(req,"422 Unprocessable Entity","{\"error\":\"invalid\"}");
+        char *body=malloc(req->content_len+1);if(!body)return reply(req,"503 Service Unavailable","{\"error\":\"unavailable\"}");
+        size_t received=0;while(received<req->content_len){int n=httpd_req_recv(req,body+received,req->content_len-received);if(n<=0)break;received+=(size_t)n;}body[received]=0;
+        if(received==req->content_len)status=playlist_admin_put(body,received,&result,&length);else status=422;
+        free(body);
+    } else {
+        bool catalog=!strncmp(req->uri,"/admin/api/roon/playlists",24);char cursor[129]={0};const char *query=strchr(req->uri,'?');
+        if(query){if(!catalog||strncmp(query,"?cursor=",8)||strlen(query+8)>128||strchr(query+8,'&'))status=422;else{strcpy(cursor,query+8);status=playlist_admin_get(true,cursor,&result,&length);}}
+        else status=playlist_admin_get(catalog,NULL,&result,&length);
+    }
+    if(!admin_http_authorize(req,false)){free(result);return ESP_OK;}
+    if(status==200&&result){httpd_resp_set_status(req,"200 OK");httpd_resp_set_type(req,"application/json; charset=utf-8");esp_err_t error=httpd_resp_send(req,result,length);free(result);return error;}
+    free(result);
+    if(status==409)return reply(req,"409 Conflict","{\"error\":\"reselect_required\"}");
+    if(status==401)return reply(req,"503 Service Unavailable","{\"error\":\"bridge_credential\"}");
+    if(status==422)return reply(req,"422 Unprocessable Entity","{\"error\":\"invalid\"}");
+    if(status==413)return reply(req,"413 Content Too Large","{\"error\":\"too_large\"}");
+    return reply(req,"503 Service Unavailable","{\"error\":\"unconfirmed\"}");
+}
 esp_err_t admin_server_register(httpd_handle_t server) {
     if(!weather_admin_init())return ESP_FAIL;
     const httpd_uri_t routes[] = {
@@ -418,6 +446,9 @@ esp_err_t admin_server_register(httpd_handle_t server) {
         {.uri="/admin/api/logout", .method=HTTP_POST, .handler=auth_handler},
         {.uri="/admin/api/pin", .method=HTTP_POST, .handler=auth_handler},
         {.uri="/admin/api/recovery-code", .method=HTTP_POST, .handler=auth_handler},
+        {.uri="/admin/api/roon/playlists", .method=HTTP_GET, .handler=playlist_handler},
+        {.uri="/admin/api/roon/favorites", .method=HTTP_GET, .handler=playlist_handler},
+        {.uri="/admin/api/roon/favorites", .method=HTTP_PUT, .handler=playlist_handler},
         {.uri="/admin/api/weather", .method=HTTP_GET, .handler=weather_handler},
         {.uri="/admin/api/weather", .method=HTTP_PUT, .handler=weather_handler},
         {.uri="/admin/api/settings", .method=HTTP_GET, .handler=settings_handler},

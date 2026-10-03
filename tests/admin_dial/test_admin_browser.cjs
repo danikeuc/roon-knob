@@ -16,6 +16,8 @@ function embedded(name) {
  let value={duration_minutes:10,rotation_degrees:0,generation:1,duration_capability_available:true,short_duration_supported:true};
  let weather={revision:0,enabled:false,latitude:null,longitude:null,timezone:'Europe/Ljubljana'};
  let weatherPuts=0,weatherLostReply=false,weatherOffline=false,weatherConflict=false;
+ let favorites={revision:3,core_epoch:7,zone_id:'sauna',zone_name:'Sauna',favorites:[{id:'old',title:'Existing',available:true,reason:null}]};
+ let favoritePuts=0,favoriteLost=false,favoriteConflict=false;
  const calls=[];
  await page.route('**/*',async route=>{
   const request=route.request(),url=new URL(request.url());calls.push(url.pathname);
@@ -25,6 +27,16 @@ function embedded(name) {
   let data={};const op=url.pathname.split('/').pop();
   if(op==='session'){if(abortSessionAfterLogout&&!authenticated)return route.abort('failed');data={setup_required:setup,authenticated,...(authenticated?{csrf:'c'.repeat(64)}:{})};}
   else if(op==='settings'){if(!authenticated)return route.fulfill({status:401,contentType:'application/json',body:'{}'});data=value;}
+  else if(op==='favorites'){
+   if(!authenticated)return route.fulfill({status:401,body:'{}'});
+   if(request.method()==='PUT'){
+    favoritePuts++;assert.equal(request.headers()['x-csrf-token'],'c'.repeat(64));const posted=request.postDataJSON();assert.deepEqual(Object.keys(posted).sort(),['core_epoch','expected_revision','items']);
+    if(favoriteConflict)return route.fulfill({status:409,body:'{}'});
+    favorites={...favorites,revision:favorites.revision+1,favorites:posted.items.map((item,i)=>({id:item.favorite_id||'saved-'+i,title:item.selection_token==='new-token'?'<img src=x onerror=evil()>':'Existing',available:true,reason:null}))};
+    if(favoriteLost)return route.abort('failed');
+   }data=favorites;
+  }
+  else if(op==='playlists')data={core_epoch:7,catalog_revision:11,items:[{selection_token:'new-token',title:'<img src=x onerror=evil()>',subtitle:'same name'}],next_cursor:null};
   else if(op==='weather'){
    if(weatherOffline)return route.abort('failed');
    if(request.method()==='PUT'){
@@ -61,6 +73,13 @@ function embedded(name) {
  await page.locator('#weather').waitFor({state:'visible'});
  await page.locator('#weather input[name=latitude]').fill('46.05');
  await page.locator('#weather input[name=longitude]').fill('14.5');
+ await page.locator('#playlist-browse').click();await page.locator('#playlist-add').waitFor({state:'visible'});
+ await page.locator('#playlist-catalog').selectOption('new-token');await page.locator('#playlist-add').click();
+ assert.equal(await page.locator('#playlist-selected img').count(),0);assert.match(await page.locator('#playlist-selected').textContent(),/<img/);
+ await page.locator('#playlist-save').click();await page.waitForFunction(()=>!document.querySelector('#playlist-save').disabled);
+ assert.equal(favoritePuts,1);assert.match(await page.locator('#playlist-status').textContent(),/shranjeni/);
+ favoriteLost=true;await page.locator('#playlist-save').click();await page.waitForFunction(()=>!document.querySelector('#playlist-save').disabled);assert.equal(favoritePuts,2);assert.match(await page.locator('#playlist-status').textContent(),/ni potrjen/);
+ favoriteLost=false;favoriteConflict=true;await page.locator('#playlist-save').click();await page.waitForFunction(()=>!document.querySelector('#playlist-save').disabled);assert.equal(favoritePuts,3);assert.match(await page.locator('#playlist-status').textContent(),/Ponovno izberite/);favoriteConflict=false;
  await page.locator('#weather input[name=enabled]').check();
  await page.locator('#weather button').click();
  await page.waitForFunction(()=>!document.querySelector('#weather button').disabled);
