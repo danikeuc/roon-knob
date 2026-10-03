@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 static unsigned puts_count, gets_count, generation, session=1;
-static bool alias_readback;
+static bool alias_readback,observe,change_observation_generation;
 static bool token_present=true, timeout_put, change_generation;
 static uint64_t saved_revision;
 static bool saved_enabled;
@@ -16,9 +16,15 @@ bool valve_config_weather_load(char *url,size_t ul,char *token,size_t tl) {
     if (!token_present) return false;
     strcpy(url,"http://192.0.2.10:8081"); strcpy(token,"private-weather-only"); return true;
 }
+bool valve_config_load(char *url,size_t ul,char *token,size_t tl){(void)ul;(void)tl;if(!observe)return false;strcpy(url,"http://192.0.2.10:8081");strcpy(token,"synthetic-display");return true;}
 static int transport(const char *method,const char *url,const char *header,const char *token,
     const char *body,size_t body_len,int *status,char *out,size_t capacity,size_t *length,void *context) {
     (void)context;
+    if(strstr(url,"/display/status")){
+        assert(!strcmp(method,"GET")&&!body&&!body_len&&!strcmp(header,"X-Display-Token")&&!strcmp(token,"synthetic-display"));
+        if(change_observation_generation)generation+=2;
+        return -1;
+    }
     assert(!strcmp(url,"http://192.0.2.10:8081/api/v1/display/weather-settings"));
     assert(!strcmp(header,"X-Weather-Settings-Token") && !strcmp(token,"private-weather-only"));
     *status=200;
@@ -59,6 +65,8 @@ int main(void) {
     token_present=true; change_generation=true;
     assert(!weather_admin_get(&view));
     alias_readback=true;assert(!weather_admin_get(&view) && view.result==WEATHER_ADMIN_INVALID);alias_readback=false;
+    observe=true;assert(weather_admin_get(&view)&&!view.observation[0]);
+    change_observation_generation=true;assert(!weather_admin_get(&view)&&view.result==WEATHER_ADMIN_UNAVAILABLE);observe=false;
     const char *bad[]={
         "{\"expected_revision\":2,\"enabled\\u0000unexpected\":true,\"latitude\":46.05,\"longitude\":14.5,\"timezone\":\"Europe/Ljubljana\"}",
         "{\"expected_revision\":9007199254740992,\"enabled\":false,\"latitude\":null,\"longitude\":null,\"timezone\":\"UTC\"}",

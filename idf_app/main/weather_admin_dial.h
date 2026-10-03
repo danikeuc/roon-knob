@@ -12,6 +12,7 @@ typedef struct {
     bool enabled, coordinates_available;
     double latitude, longitude;
     char timezone[WEATHER_TIMEZONE_LEN];
+    char observation[1024]; /* Whitelisted read-only GET data; empty means unknown. */
     weather_admin_result_t result; /* Internal only; never serialized to the Pi DTO. */
 } weather_settings_view_t;
 typedef struct {
@@ -27,6 +28,7 @@ bool weather_settings_write_parse(const char *json,size_t length,weather_setting
 bool weather_settings_view_json(const weather_settings_view_t *view,char *out,size_t capacity);
 /* Mutation epoch cancels unsent held touches. It never commands a valve. */
 uint32_t weather_admin_generation(void);
+bool weather_admin_view_json(const weather_settings_view_t *,char *,size_t);
 #ifdef WEATHER_ADMIN_HOST_TEST
 typedef int (*weather_admin_transport_fn)(const char *,const char *,const char *,const char *,
     const char *,size_t,int *,char *,size_t,size_t *,void *);

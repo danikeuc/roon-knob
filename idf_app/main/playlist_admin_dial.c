@@ -64,7 +64,7 @@ static bool text(const cJSON *j,char *out,size_t cap,size_t max,bool empty){retu
 bool playlist_favorites_parse(const char *body,size_t len,playlist_favorites_t *out) {
  static const char *const top[]={"revision","core_epoch","zone_id","zone_name","favorites"},*const entry[]={"id","title","available","reason"};
  cJSON *j=playlist_json_parse(body,len,PLAYLIST_FAVORITES_MAX);playlist_favorites_t f={0};char label[257];
- bool ok=keys(j,top,5)&&number(get(j,"revision"),&f.revision)&&number(get(j,"core_epoch"),&f.core_epoch)&&text(get(j,"zone_id"),f.zone_id,sizeof f.zone_id,128,false)&&text(get(j,"zone_name"),label,sizeof label,256,true);
+ bool ok=keys(j,top,5)&&number(get(j,"revision"),&f.revision)&&number(get(j,"core_epoch"),&f.core_epoch)&&text(get(j,"zone_id"),f.zone_id,sizeof f.zone_id,128,false)&&text(get(j,"zone_name"),label,sizeof label,256,true)&&playlist_label_copy(f.zone_name,sizeof f.zone_name,label,256);
  cJSON *array=get(j,"favorites");int count=cJSON_GetArraySize(array);ok=ok&&cJSON_IsArray(array)&&count>=0&&count<=5;
  for(int i=0;ok&&i<count;i++) {
   cJSON *item=cJSON_GetArrayItem(array,i);playlist_favorite_t *e=&f.entries[i];

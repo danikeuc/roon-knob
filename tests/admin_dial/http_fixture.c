@@ -429,3 +429,7 @@ bool valve_config_weather_load(char *url,size_t ul,char *token,size_t tl) {
 bool valve_config_save_weather(const char *url,const char *display,const char *weather) {
     (void)weather;return valve_config_save(url,display);
 }
+
+bool valve_config_load(char *url,size_t ul,char *token,size_t tl) {
+ (void)ul;(void)tl;strcpy(url,"http://192.0.2.10:8081");strcpy(token,"private-test-token");return true;
+}

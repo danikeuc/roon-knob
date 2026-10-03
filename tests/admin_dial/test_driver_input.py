@@ -43,6 +43,7 @@ static void display_activity_detected(void){}
 static bool valve_ui_visible(void){return visible;}
 static void valve_ui_wake(void){}
 static void valve_ui_cancel_touch(void){cancels++;}
+static bool playlist_ui_visible(void){return false;}
 static void playlist_ui_cancel(void){}
 static bool playlist_ui_touch(int x,int y,bool down,bool moved,uint64_t time){(void)x;(void)y;(void)down;(void)moved;(void)time;return false;}
 static void valve_ui_touch(int x,int y,bool press,bool moved,uint32_t time){(void)press;(void)moved;(void)time;touches++;delivered=(dial_point_t){x,y};}

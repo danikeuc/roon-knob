@@ -15,6 +15,7 @@ function embedded(name) {
  let authenticated=false,setup=true,saveCount=0,failSave=false,abortSessionAfterLogout=false;
  let value={duration_minutes:10,rotation_degrees:0,generation:1,duration_capability_available:true,short_duration_supported:true};
  let weather={revision:0,enabled:false,latitude:null,longitude:null,timezone:'Europe/Ljubljana'};
+ let observation={operation:'AUTO_SUPPLY',enabled:true,available:true,eligible:true,reason:'eligible',dates:['2026-10-03','2026-10-04','2026-10-05','2026-10-06','2026-10-07'],minima_c:[5,6,7,8,9],last_successful_check:'2026-10-03T10:00:00+00:00'};
  let weatherPuts=0,weatherLostReply=false,weatherOffline=false,weatherConflict=false;
  let favorites={revision:3,core_epoch:7,zone_id:'sauna',zone_name:'Sauna',favorites:[{id:'old',title:'Existing',available:true,reason:null}]};
  let favoritePuts=0,favoriteLost=false,favoriteConflict=false;
@@ -46,7 +47,7 @@ function embedded(name) {
     assert.equal(posted.expected_revision,weather.revision);
     weather={revision:weather.revision+1,enabled:posted.enabled,latitude:posted.latitude,longitude:posted.longitude,timezone:posted.timezone};
     if(weatherLostReply)return route.abort('failed');
-   }data=weather;
+   }data=request.method()==='GET'?{...weather,observation}:weather;
   }
   else if(op==='setup' ||op==='recover'||op==='recovery-code'){data={recovery_code:(op==='recovery-code'?'d':'b').repeat(32)};setup=false;}
   else if(op==='login')authenticated=true;
@@ -71,6 +72,19 @@ function embedded(name) {
  await page.locator('#code-saved').click();assert.equal(await page.locator('#issued-code').textContent(),'');
  await page.locator('#login input[name=pin]').fill('0123');await page.locator('#login button').click();
  await page.locator('#weather').waitFor({state:'visible'});
+ assert.match(await page.locator('#weather-operation').textContent(),/AUTO_SUPPLY/);
+ assert.match(await page.locator('#weather-minima').textContent(),/2026-10-07.*9/);
+ assert.match(await page.locator('#weather-check').textContent(),/2026-10-03T10:00/);
+ assert.match(await page.locator('#weather').textContent(),/15 minut/);
+ observation={...observation,operation:'MANUAL_IDLE',eligible:false,reason:'below_threshold',minima_c:[4.9,6,7,8,9]};
+ await page.locator('#weather-refresh').click();await page.waitForFunction(()=>document.querySelector('#weather-reason').textContent.includes('below_threshold'));
+ assert.match(await page.locator('#weather-minima').textContent(),/4.9/);
+ observation={...observation,operation:'MANUAL_IDLE',available:false,eligible:false,reason:'fetch_failed'};
+ await page.locator('#weather-refresh').click();await page.waitForFunction(()=>document.querySelector('#weather-reason').textContent.includes('fetch_failed'));
+ assert.match(await page.locator('#weather-minima').textContent(),/zadnja/);
+ observation={...observation,operation:'USER_OFF'};await page.locator('#weather-refresh').click();await page.waitForFunction(()=>document.querySelector('#weather-operation').textContent.includes('USER_OFF'));
+ observation=null;await page.locator('#weather-refresh').click();await page.waitForFunction(()=>document.querySelector('#weather-operation').textContent.includes('neznano'));
+ assert.equal(await page.locator('#weather button').isDisabled(),false);assert.equal(weatherPuts,0);
  await page.locator('#weather input[name=latitude]').fill('46.05');
  await page.locator('#weather input[name=longitude]').fill('14.5');
  await page.locator('#playlist-browse').click();await page.locator('#playlist-add').waitFor({state:'visible'});

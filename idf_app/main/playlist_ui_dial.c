@@ -23,13 +23,14 @@ static bool shown,loading,candidate,movement,consume_release,new_press;
 static uint64_t press_ms;
 static char message[97];
 #ifndef PLAYLIST_UI_HOST_TEST
-static lv_obj_t *panel,*title,*label,*hint;
+static lv_obj_t *panel,*title,*label,*hint,*target;
 bool playlist_ui_context_allowed(void){return !valve_ui_visible()&&!admin_settings_input_blocked()&&!ui_is_zone_picker_visible()&&!ui_is_settings_visible()&&display_get_state()==DISPLAY_STATE_NORMAL&&!display_is_touch_suppressed();}
 bool playlist_ui_current_zone(char *out,size_t cap){return bridge_client_get_current_zone_id(out,cap);}
 uint64_t playlist_ui_now_ms(void){return (uint64_t)(esp_timer_get_time()/1000);}
 static void playlist_ui_render(const controller_playlist_t *s,const char *text){
- if(!panel){panel=lv_obj_create(lv_screen_active());lv_obj_set_size(panel,360,360);lv_obj_center(panel);lv_obj_set_style_bg_color(panel,lv_color_hex(0x111827),0);lv_obj_set_style_bg_opa(panel,LV_OPA_COVER,0);title=lv_label_create(panel);lv_label_set_text(title,"Seznami predvajanja");lv_obj_align(title,LV_ALIGN_TOP_MID,0,64);label=lv_label_create(panel);lv_obj_set_width(label,280);lv_obj_set_style_text_align(label,LV_TEXT_ALIGN_CENTER,0);lv_label_set_long_mode(label,LV_LABEL_LONG_DOT);lv_obj_center(label);hint=lv_label_create(panel);lv_obj_set_width(hint,290);lv_obj_set_style_text_align(hint,LV_TEXT_ALIGN_CENTER,0);lv_obj_align(hint,LV_ALIGN_BOTTOM_MID,0,-65);}
+ if(!panel){panel=lv_obj_create(lv_screen_active());lv_obj_set_size(panel,360,360);lv_obj_center(panel);lv_obj_set_style_bg_color(panel,lv_color_hex(0x111827),0);lv_obj_set_style_bg_opa(panel,LV_OPA_COVER,0);title=lv_label_create(panel);lv_label_set_text(title,"Seznami predvajanja");lv_obj_align(title,LV_ALIGN_TOP_MID,0,54);target=lv_label_create(panel);lv_obj_set_width(target,280);lv_obj_set_style_text_align(target,LV_TEXT_ALIGN_CENTER,0);lv_label_set_long_mode(target,LV_LABEL_LONG_DOT);lv_obj_align(target,LV_ALIGN_TOP_MID,0,88);label=lv_label_create(panel);lv_obj_set_width(label,280);lv_obj_set_style_text_align(label,LV_TEXT_ALIGN_CENTER,0);lv_label_set_long_mode(label,LV_LABEL_LONG_DOT);lv_obj_center(label);hint=lv_label_create(panel);lv_obj_set_width(hint,290);lv_obj_set_style_text_align(hint,LV_TEXT_ALIGN_CENTER,0);lv_obj_align(hint,LV_ALIGN_BOTTOM_MID,0,-65);}
  if(s->phase==PLAYLIST_IDLE){lv_obj_add_flag(panel,LV_OBJ_FLAG_HIDDEN);return;}
+ lv_label_set_text(target,s->favorites.zone_name[0]?s->favorites.zone_name:"Območje še ni potrjeno");
  lv_obj_clear_flag(panel,LV_OBJ_FLAG_HIDDEN);lv_obj_move_foreground(panel);
  char line[160];if(s->phase==PLAYLIST_PICKING){snprintf(line,sizeof line,"%s",s->selected==(int)s->favorites.count?"Nazaj":s->favorites.entries[s->selected].title);lv_label_set_text(label,line);lv_label_set_text(hint,"Obrnite za izbiro · tap za predvajanje");}
  else{lv_label_set_text(label,text);lv_label_set_text(hint,s->phase==PLAYLIST_ERROR?"Tap za zapiranje":"Prosimo počakajte");}

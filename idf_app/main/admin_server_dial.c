@@ -403,8 +403,8 @@ static esp_err_t weather_handler(httpd_req_t *req) {
         if(output.result==WEATHER_ADMIN_INVALID)return reply(req,"422 Unprocessable Entity","{\"error\":\"invalid\"}");
         return reply(req,"503 Service Unavailable","{\"error\":\"unavailable\"}");
     }
-    char body[384];
-    if(!weather_settings_view_json(&output,body,sizeof body))return reply(req,"503 Service Unavailable","{\"error\":\"unavailable\"}");
+    char body[1536];
+    if(!(write?weather_settings_view_json(&output,body,sizeof body):weather_admin_view_json(&output,body,sizeof body)))return reply(req,"503 Service Unavailable","{\"error\":\"unavailable\"}");
     return reply(req,"200 OK",body);
 }
 static esp_err_t playlist_handler(httpd_req_t *req) {

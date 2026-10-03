@@ -29,11 +29,12 @@ void runtime_http_case(fixture_http_case_t value) {
     scenario=value;clock_origin=runtime_wall_ms();atomic_store(&fixture_body_writes,0);atomic_store(&fixture_cleanups,0);atomic_store(&released_jobs,0);
 }
 int64_t esp_timer_get_time(void) { return (int64_t)(runtime_wall_ms()-clock_origin)*100*1000; }
-void runtime_wait_cleanup(unsigned count) {
+void runtime_wait_counts(unsigned exchanges,unsigned jobs) {
     uint64_t deadline=runtime_wall_ms()+1000;
-    while((atomic_load(&fixture_cleanups)<count || atomic_load(&released_jobs)<count) && runtime_wall_ms()<deadline)pause_ms(1);
-    assert(atomic_load(&fixture_cleanups)>=count && atomic_load(&released_jobs)>=count);
+    while((atomic_load(&fixture_cleanups)<exchanges || atomic_load(&released_jobs)<jobs) && runtime_wall_ms()<deadline)pause_ms(1);
+    assert(atomic_load(&fixture_cleanups)>=exchanges && atomic_load(&released_jobs)>=jobs);
 }
+void runtime_wait_cleanup(unsigned count){runtime_wait_counts(count,count);}
 struct fake_http { esp_http_client_method_t method;int timeout;char response[2048];size_t offset;bool weather; };
 esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *config) {
     struct fake_http *client=calloc(1,sizeof *client);assert(client);
@@ -54,7 +55,7 @@ esp_err_t esp_http_client_set_timeout_ms(esp_http_client_handle_t client,int val
 esp_err_t esp_http_client_open(esp_http_client_handle_t client,int length) {
     (void)length;
     if(scenario==HTTP_ACTION_EXPIRED_OPEN)fixture_action_now+=client->method==HTTP_METHOD_GET?500:2000;
-    if(scenario==HTTP_WEATHER_STALLED_OPEN)pause_ms(300); /* DNS ignores socket timeout. */
+    if(scenario==HTTP_WEATHER_STALLED_OPEN||(scenario==HTTP_OBSERVATION_STALLED_OPEN&&!client->weather))pause_ms(300); /* DNS ignores socket timeout. */
     return ESP_OK;
 }
 int esp_http_client_write(esp_http_client_handle_t client,const char *body,int length) {

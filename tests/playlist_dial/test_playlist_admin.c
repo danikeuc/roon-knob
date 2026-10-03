@@ -5,7 +5,7 @@
 int main(void) {
  playlist_favorites_t f;
  const char *valid="{\"revision\":3,\"core_epoch\":7,\"zone_id\":\"sauna\",\"zone_name\":\"Sauna\",\"favorites\":[{\"id\":\"opaque\",\"title\":\"<img src=x onerror=evil()>\",\"available\":true,\"reason\":null}]}";
- assert(playlist_favorites_parse(valid,strlen(valid),&f)&&f.count==1&&!strcmp(f.entries[0].id,"opaque"));
+ assert(playlist_favorites_parse(valid,strlen(valid),&f)&&f.count==1&&!strcmp(f.entries[0].id,"opaque")&&!strcmp(f.zone_name,"Sauna"));
  assert(!playlist_favorites_parse("{\"revision\\u0000evil\":3}",24,&f));
  assert(!playlist_write_valid("{\"expected_revision\":3,\"core_epoch\":7,\"items\":[{\"favorite_id\":\"x\",\"selection_token\":\"y\"}]}",92));
  const char *write="{\"expected_revision\":3,\"core_epoch\":7,\"items\":[{\"favorite_id\":\"x\"}]}";
@@ -18,5 +18,8 @@ int main(void) {
  for(unsigned i=0;i<sizeof aliases/sizeof aliases[0];i++)assert(!playlist_write_valid(aliases[i],strlen(aliases[i])));
  char longid[130];memset(longid,'x',129);longid[129]=0;char body[1024];snprintf(body,sizeof body,"{\"revision\":3,\"core_epoch\":7,\"zone_id\":\"sauna\",\"zone_name\":\"Sauna\",\"favorites\":[{\"id\":\"%s\",\"title\":\"Music\",\"available\":true,\"reason\":null}]}",longid);assert(!playlist_favorites_parse(body,strlen(body),&f));
  char title[257];memset(title,'a',256);title[256]=0;snprintf(body,sizeof body,"{\"revision\":3,\"core_epoch\":7,\"zone_id\":\"sauna\",\"zone_name\":\"Sauna\",\"favorites\":[{\"id\":\"id\",\"title\":\"%s\",\"available\":true,\"reason\":null}]}",title);assert(playlist_favorites_parse(body,strlen(body),&f)&&strlen(f.entries[0].title)==96);
+ char zone[256];for(unsigned i=0;i<255;i+=3)memcpy(zone+i,"€",3);zone[255]=0;
+ snprintf(body,sizeof body,"{\"revision\":3,\"core_epoch\":7,\"zone_id\":\"sauna\",\"zone_name\":\"%s\",\"favorites\":[]}",zone);
+ assert(playlist_favorites_parse(body,strlen(body),&f)&&strlen(f.zone_name)==96&&f.count==0);
  puts("playlist admin parser/private URL binding PASS");
 }

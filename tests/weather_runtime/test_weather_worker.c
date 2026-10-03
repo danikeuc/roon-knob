@@ -30,5 +30,12 @@ int main(void) {
     local=fixture_request("/admin/api/settings",HTTP_GET,NULL);local.cookie=cookie;fixture_call(&local);assert(fixture_status(&local)==200);
     runtime_wait_cleanup(1);assert(atomic_load(&fixture_body_writes)==1); /* uncertain dispatched PUT never replayed */
     runtime_http_case(HTTP_WEATHER_NORMAL);assert(weather_admin_get(&view) && view.revision==1);
+    runtime_wait_counts(2,1);
+    runtime_http_case(HTTP_OBSERVATION_STALLED_OPEN);
+    began=runtime_wall_ms();request=fixture_request("/admin/api/weather",HTTP_GET,NULL);request.cookie=cookie;fixture_call(&request);
+    assert(fixture_status(&request)==200&&runtime_wall_ms()-began<150);
+    assert(strstr(request.response,"\"revision\":1")&&strstr(request.response,"\"observation\":null"));
+    assert(!weather_admin_get(&view)); /* No second worker while optional GET stalls. */
+    runtime_wait_counts(2,1);assert(atomic_load(&fixture_body_writes)==0);
     puts("production weather worker/HTTP bounded wait, late result, no PUT retry: PASS");
 }

@@ -3,6 +3,7 @@ import ast,subprocess,tempfile
 from pathlib import Path
 original=ast.parse(Path('tests/admin_dial/test_driver_input.py').read_text())
 preamble=next(ast.literal_eval(n.value) for n in original.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='preamble' for t in n.targets))
+preamble=preamble.replace('static bool playlist_ui_visible(void){return false;}\n','')
 preamble=preamble.replace('static void playlist_ui_cancel(void){}\n','').replace('static bool playlist_ui_touch(int x,int y,bool down,bool moved,uint64_t time){(void)x;(void)y;(void)down;(void)moved;(void)time;return false;}\n','')
 preamble=preamble.replace('static bool display_is_touch_suppressed(void){return false;}','static bool wake;\nstatic bool display_is_touch_suppressed(void){return wake;}')
 preamble+='''

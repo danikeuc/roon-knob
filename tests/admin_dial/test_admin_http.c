@@ -7,6 +7,7 @@
 #include "cJSON.h"
 #include "admin_server_dial.h"
 #include "weather_admin_dial.h"
+#include "../valve_dial/weather_status_fixtures.h"
 static void test_old_config_routes_require_session(void) {
     fixture_reset();
     config_server_start();
@@ -430,11 +431,20 @@ static void test_ipv4_host_on_dual_stack_socket(void) {
 
 static unsigned weather_gets,weather_puts;
 static bool weather_missing,weather_timeout;
+static const char *observation_fixture;
+static bool observation_offline;
 static uint64_t weather_revision;
 static bool weather_enabled;
 static int weather_transport(const char *method,const char *url,const char *header,const char *token,
     const char *body,size_t body_length,int *status,char *out,size_t capacity,size_t *length,void *context) {
     (void)context;
+    if(strstr(url,"/display/status")){
+        assert(!strcmp(method,"GET")&&!body&&!body_length);
+        assert(!strcmp(header,"X-Display-Token")&&!strcmp(token,"private-test-token"));
+        if(observation_offline)return -1;
+        assert(observation_fixture&&strlen(observation_fixture)<capacity);
+        strcpy(out,observation_fixture);*length=strlen(out);*status=200;return 0;
+    }
     assert(!strcmp(url,"http://192.0.2.10:8081/api/v1/display/weather-settings"));
     assert(!strcmp(header,"X-Weather-Settings-Token")&&!strcmp(token,"private-weather-http"));
     if(weather_missing)return -1;
@@ -453,10 +463,30 @@ static int weather_transport(const char *method,const char *url,const char *head
 static void test_weather_proxy_protected_and_exact(void) {
     fixture_reset();config_server_start();login();
     weather_admin_test_transport(weather_transport,NULL);
-    weather_revision=0;weather_enabled=false;weather_gets=weather_puts=0;
+    weather_revision=0;weather_enabled=false;weather_gets=weather_puts=0;observation_fixture=weather_fixture_3;
     httpd_req_t r=fixture_request("/admin/api/weather",HTTP_GET,NULL);r.cookie=cookie;
     fixture_call(&r);assert(fixture_status(&r)==200);
-    cJSON *json=cJSON_Parse(r.response);assert(json && cJSON_GetArraySize(json)==5);cJSON_Delete(json);
+    cJSON *json=cJSON_Parse(r.response);assert(json && cJSON_GetArraySize(json)==6);
+    cJSON *observed=cJSON_GetObjectItemCaseSensitive(json,"observation");
+    assert(cJSON_IsObject(observed)&&!strcmp(cJSON_GetObjectItem(observed,"operation")->valuestring,"AUTO_SUPPLY"));
+    assert(cJSON_GetArraySize(cJSON_GetObjectItem(observed,"minima_c"))==5);
+    assert(!strstr(r.response,"action_nonce"));cJSON_Delete(json);
+    cJSON *cold=cJSON_Parse(weather_fixture_0),*warm=cJSON_Parse(weather_fixture_3);
+    cJSON_ReplaceItemInObjectCaseSensitive(cold,"weather",cJSON_Duplicate(cJSON_GetObjectItem(warm,"weather"),true));
+    cJSON *details=cJSON_GetObjectItem(cold,"weather");
+    cJSON_ReplaceItemInObjectCaseSensitive(details,"eligible",cJSON_CreateBool(false));
+    cJSON_ReplaceItemInObjectCaseSensitive(details,"reason",cJSON_CreateString("below_threshold"));
+    cJSON_ReplaceItemInArray(cJSON_GetObjectItem(details,"minima_c"),0,cJSON_CreateNumber(4.9));
+    char observed_body[2048];assert(cJSON_PrintPreallocated(cold,observed_body,sizeof observed_body,false));observation_fixture=observed_body;
+    r=fixture_request("/admin/api/weather",HTTP_GET,NULL);r.cookie=cookie;fixture_call(&r);assert(strstr(r.response,"below_threshold")&&strstr(r.response,"4.9")&&strstr(r.response,"MANUAL_IDLE"));
+    cJSON_ReplaceItemInObjectCaseSensitive(details,"available",cJSON_CreateBool(false));
+    cJSON_ReplaceItemInObjectCaseSensitive(details,"reason",cJSON_CreateString("fetch_failed"));
+    assert(cJSON_PrintPreallocated(cold,observed_body,sizeof observed_body,false));
+    r=fixture_request("/admin/api/weather",HTTP_GET,NULL);r.cookie=cookie;fixture_call(&r);assert(strstr(r.response,"fetch_failed")&&strstr(r.response,"2026-10-03T10:00"));
+    cJSON_Delete(cold);cJSON_Delete(warm);
+    observation_fixture=weather_fixture_2;r=fixture_request("/admin/api/weather",HTTP_GET,NULL);r.cookie=cookie;fixture_call(&r);assert(strstr(r.response,"USER_OFF"));
+    observation_offline=true;r=fixture_request("/admin/api/weather",HTTP_GET,NULL);r.cookie=cookie;fixture_call(&r);assert(fixture_status(&r)==200&&strstr(r.response,"\"observation\":null"));observation_offline=false;
+    observation_fixture="{}";r=fixture_request("/admin/api/weather",HTTP_GET,NULL);r.cookie=cookie;fixture_call(&r);assert(fixture_status(&r)==200&&strstr(r.response,"\"observation\":null"));observation_fixture=weather_fixture_3;
     assert(!strstr(r.response,"token")&&!strstr(r.response,"private-weather-http"));
     const char *body="{\"expected_revision\":0,\"enabled\":true,\"latitude\":46.05,\"longitude\":14.5,\"timezone\":\"Europe/Ljubljana\"}";
     const char *origins[]={NULL,"null","http://evil.example"};

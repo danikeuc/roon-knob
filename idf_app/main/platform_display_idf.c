@@ -39,6 +39,7 @@ static int16_t s_touch_start_y = 0;
 static int64_t s_touch_start_time = 0;
 static bool s_touch_tracking = false;
 static bool s_touch_consumed = false;
+static bool s_touch_started_on_playlist;
 static bool s_touch_started_on_valve = false;
 static bool s_touch_wake = false;
 static int16_t s_touch_last_x, s_touch_last_y;
@@ -354,6 +355,7 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
             s_touch_tracking = true;
             s_touch_consumed = false;
             s_touch_started_on_valve = valve_ui_visible();
+            s_touch_started_on_playlist = playlist_ui_visible();
             s_touch_wake = state != DISPLAY_STATE_NORMAL || display_is_touch_suppressed();
             if (state != DISPLAY_STATE_NORMAL) valve_ui_wake();
         }
@@ -369,9 +371,6 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
         }
         int dx = (int)x - s_touch_start_x;
         int dy = (int)y - s_touch_start_y;
-        if(!s_touch_started_on_valve && playlist_ui_touch(x,y,true,abs(dx)>20||abs(dy)>20,now_ms)) {
-            s_touch_consumed=true;data->state=LV_INDEV_STATE_RELEASED;lv_indev_reset(indev,NULL);return;
-        }
         valve_gesture_context_t context = {
             .zone_picker = ui_is_zone_picker_visible(),
             .settings = ui_is_settings_visible(),
@@ -380,12 +379,19 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
         };
         valve_gesture_t gesture = valve_gesture_classify(dx, dy,
             now_ms - (uint32_t)s_touch_start_time, 0, context);
-        if (!s_touch_consumed && gesture == VALVE_GESTURE_SWITCH_SCREEN) {
+        if ((!s_touch_consumed || s_touch_started_on_playlist) &&
+            gesture == VALVE_GESTURE_SWITCH_SCREEN) {
+            playlist_ui_cancel();
+            s_touch_started_on_playlist = false;
             s_touch_consumed = true;
             s_pending_page_switch = true;
             valve_ui_cancel_touch();
             /* Cancel the active LVGL press before a release can produce CLICKED. */
             lv_indev_reset(indev, NULL);
+        }
+        if (!s_touch_started_on_valve && (!s_touch_consumed || playlist_ui_visible()) &&
+            playlist_ui_touch(x,y,true,abs(dx)>20||abs(dy)>20,now_ms)) {
+            s_touch_consumed=true;data->state=LV_INDEV_STATE_RELEASED;lv_indev_reset(indev,NULL);return;
         }
         if (s_touch_started_on_valve) {
             if (!s_touch_consumed)

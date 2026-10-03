@@ -17,7 +17,7 @@ bool playlist_label_copy(char *out,size_t capacity,const char *text,size_t limit
  memcpy(out,text,end);out[end]=0;return true;
 }
 playlist_action_t controller_playlist_open(controller_playlist_t *s,const playlist_favorites_t *f,const char *zone,uint64_t now) {
- if(!s||!f||!zone||f->count>5||!memchr(f->zone_id,0,sizeof f->zone_id)||strcmp(f->zone_id,zone)||!*zone)return action(PLAYLIST_ACTION_NONE);
+ if(!s||!f||!zone||f->count>5||!memchr(f->zone_name,0,sizeof f->zone_name)||!memchr(f->zone_id,0,sizeof f->zone_id)||strcmp(f->zone_id,zone)||!*zone)return action(PLAYLIST_ACTION_NONE);
  for(unsigned i=0;i<f->count;i++) {
   const playlist_favorite_t *e=&f->entries[i];
   if(!memchr(e->id,0,sizeof e->id)||!e->id[0]||!memchr(e->title,0,sizeof e->title))return action(PLAYLIST_ACTION_NONE);
