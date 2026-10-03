@@ -16,6 +16,11 @@
 #include <time.h>
 #include <errno.h>
 atomic_uint fixture_body_writes,fixture_cleanups,fixture_last_timeout;
+#ifdef COMBINED_ISOLATION
+extern uint64_t combined_clock_ms(void);
+atomic_bool combined_open_blocked,combined_release_open;
+static atomic_bool combined_worker_idle;
+#endif
 uint64_t fixture_action_now;
 static atomic_uint released_jobs;
 static fixture_http_case_t scenario;
@@ -36,11 +41,24 @@ static void pause_ms(unsigned milliseconds) {
 void runtime_http_case(fixture_http_case_t value) {
     scenario=value;atomic_store(&changed_zone,false);clock_origin=runtime_wall_ms();atomic_store(&fixture_body_writes,0);atomic_store(&fixture_cleanups,0);atomic_store(&released_jobs,0);
 }
-int64_t esp_timer_get_time(void) { return (int64_t)(runtime_wall_ms()-clock_origin)*100*1000; }
+int64_t esp_timer_get_time(void) {
+#ifdef COMBINED_ISOLATION
+ return (int64_t)combined_clock_ms()*1000;
+#else
+ return (int64_t)(runtime_wall_ms()-clock_origin)*100*1000;
+#endif
+}
 void runtime_wait_cleanup(unsigned count) {
     uint64_t deadline=runtime_wall_ms()+1000;
+#ifdef COMBINED_ISOLATION
+    /* UI jobs have no admin waiter/semaphore. HTTP cleanup closes each
+     * exchange; result consumption below separately observes job completion. */
+    while((atomic_load(&fixture_cleanups)<count||!atomic_load(&combined_worker_idle))&&runtime_wall_ms()<deadline)pause_ms(1);
+    assert(atomic_load(&fixture_cleanups)>=count&&atomic_load(&combined_worker_idle));
+#else
     while((atomic_load(&fixture_cleanups)<count || atomic_load(&released_jobs)<count) && runtime_wall_ms()<deadline)pause_ms(1);
     assert(atomic_load(&fixture_cleanups)>=count && atomic_load(&released_jobs)>=count);
+#endif
 }
 struct fake_http { esp_http_client_method_t method;int timeout;char response[2048];size_t offset;bool weather; };
 esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *config) {
@@ -65,7 +83,16 @@ esp_err_t esp_http_client_set_timeout_ms(esp_http_client_handle_t client,int val
 esp_err_t esp_http_client_open(esp_http_client_handle_t client,int length) {
     (void)length;
     if(scenario==HTTP_ACTION_EXPIRED_OPEN&&client->method==HTTP_METHOD_POST)atomic_store(&changed_zone,true);
-    if(scenario==HTTP_WEATHER_STALLED_OPEN)pause_ms(300); /* DNS ignores socket timeout. */
+    if(scenario==HTTP_WEATHER_STALLED_OPEN) {
+#ifdef COMBINED_ISOLATION
+        atomic_store(&combined_open_blocked,true);
+        uint64_t limit=runtime_wall_ms()+2000;
+        while(!atomic_load(&combined_release_open)&&runtime_wall_ms()<limit)pause_ms(1);
+        assert(atomic_load(&combined_release_open));
+#else
+        pause_ms(300); /* DNS ignores socket timeout. */
+#endif
+    }
     return ESP_OK;
 }
 int esp_http_client_write(esp_http_client_handle_t client,const char *body,int length) {
@@ -90,19 +117,27 @@ esp_err_t esp_http_client_cleanup(esp_http_client_handle_t client) { free(client
 struct fake_queue { pthread_mutex_t lock;pthread_cond_t changed;unsigned capacity,count,head;size_t item_size;unsigned char *data; };
 QueueHandle_t xQueueCreate(unsigned capacity,size_t size) {
     struct fake_queue *queue=calloc(1,sizeof *queue);assert(queue);pthread_mutex_init(&queue->lock,NULL);pthread_cond_init(&queue->changed,NULL);
-    if(size>sizeof(void *)){assert(!mailbox);mailbox=queue;}
+    if(capacity==1&&size>sizeof(void *)){assert(!mailbox);mailbox=queue;}
     queue->capacity=capacity;queue->item_size=size;queue->data=calloc(capacity,size);assert(queue->data);return queue;
 }
 int xQueueSend(QueueHandle_t queue,const void *item,unsigned wait) {
     (void)wait;pthread_mutex_lock(&queue->lock);
     if(queue->count==queue->capacity){pthread_mutex_unlock(&queue->lock);return pdFALSE;}
+#ifdef COMBINED_ISOLATION
+    if(queue->item_size==sizeof(void *))atomic_store(&combined_worker_idle,false);
+#endif
     memcpy(queue->data+((queue->head+queue->count)%queue->capacity)*queue->item_size,item,queue->item_size);
     ++queue->count;pthread_cond_signal(&queue->changed);pthread_mutex_unlock(&queue->lock);return pdTRUE;
 }
 int xQueueReceive(QueueHandle_t queue,void *item,unsigned wait) {
     assert(wait==portMAX_DELAY||wait==0);pthread_mutex_lock(&queue->lock);
     if(!queue->count&&!wait){pthread_mutex_unlock(&queue->lock);return pdFALSE;}
-    while(!queue->count)pthread_cond_wait(&queue->changed,&queue->lock);
+    while(!queue->count){
+#ifdef COMBINED_ISOLATION
+        if(queue->item_size==sizeof(void *))atomic_store(&combined_worker_idle,true);
+#endif
+        pthread_cond_wait(&queue->changed,&queue->lock);
+    }
     if(queue==mailbox&&preempt_reader){
         /* Suspend the lower-priority receiver inside its kernel-owned copy.
          * The actual production worker reaches overwrite during that window;

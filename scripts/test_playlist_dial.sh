@@ -27,3 +27,16 @@ cc -std=c11 -Wall -Wextra -Werror -pthread \
 "$task_tmp/worker"
 
 python3 tests/playlist_dial/test_driver_playlist.py
+
+# Link the real valve UI/client and production playlist RTOS/HTTP worker.
+cc -std=c11 -Wall -Wextra -Werror -Wno-unused-function -pthread \
+ -DCOMBINED_ISOLATION -DPLAYLIST_UI_HOST_TEST -DVALVE_CLIENT_HOST_TEST -DVALVE_UI_HOST_TEST -DADMIN_SETTINGS_HOST_TEST \
+ -ffunction-sections -fdata-sections \
+ -I"$idf/components/json/cJSON" -Itests/playlist_dial/runtime_fakes -Itests/weather_runtime/fakes -Itests/admin_dial/http_fakes -Itests/admin_dial/fakes -Itests/valve_dial/fakes \
+ -Itests/weather_runtime -Itests/valve_dial -Icommon -Iinclude -Iidf_app/main \
+ tests/playlist_dial/test_weather_playlist_isolation.c tests/playlist_dial/runtime_fixture.c \
+ idf_app/main/valve_ui_dial.c idf_app/main/valve_client_dial.c idf_app/main/valve_logic.c \
+ idf_app/main/playlist_ui_dial.c idf_app/main/playlist_client_dial.c idf_app/main/playlist_admin_dial.c \
+ common/controller_playlist.c common/controller_input.c common/platform/platform_task.c \
+ tests/playlist_dial/input_profile_fake.c "$idf/components/json/cJSON/cJSON.c" -Wl,--gc-sections -lm -o "$task_tmp/isolation"
+"$task_tmp/isolation"
