@@ -3,6 +3,7 @@
 #include "admin_auth_dial.h"
 extern httpd_uri_t routes[40];
 extern int route_count,fail_registration,reads,writes,auth_queries,auth_mutations;
+extern int fixture_http_stack_size;
 extern bool configured,valid_session,storage_error;
 extern admin_result_t next_auth;
 extern const char *fixture_session;

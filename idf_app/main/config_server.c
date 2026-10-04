@@ -1007,7 +1007,10 @@ void config_server_start(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
     config.max_uri_handlers = 28;
-    config.stack_size = 8192;  // Increased for mDNS resolution during config save
+    // The measured config-save path, including HTTP dispatch, uses 8256 bytes
+    // before task-wrapper/context overhead. Reserve additional runtime headroom;
+    // target stack high-water and device acceptance remain separate checks.
+    config.stack_size = 16384;
     // Note: max_req_hdr_len set via CONFIG_HTTPD_MAX_REQ_HDR_LEN in sdkconfig
 
     ESP_LOGI(TAG, "Starting config server on port %d", config.server_port);

@@ -8,6 +8,18 @@
 #include "admin_server_dial.h"
 #include "weather_admin_dial.h"
 #include "../valve_dial/weather_status_fixtures.h"
+static void test_config_task_stack_covers_measured_save_path(void) {
+    /* Issue 11: the installed Xtensa ELF's supported configuration readback/log
+     * call chain, including HTTP dispatch, needs 8256 bytes before task-wrapper
+     * and context overhead. Keep at least 2 KiB of extra runtime headroom; this is a lower-bound regression,
+     * not a replacement for target stack measurements or device acceptance. */
+    const int measured_save_path_bytes = 8256;
+    const int runtime_headroom_bytes = 2048;
+    fixture_reset();
+    config_server_start();
+    assert(fixture_http_stack_size >= measured_save_path_bytes + runtime_headroom_bytes);
+    config_server_stop();
+}
 static void test_old_config_routes_require_session(void) {
     fixture_reset();
     config_server_start();
@@ -554,6 +566,7 @@ static void test_playlist_routes_protected(void) {
  }
 }
 int main(void) {
+    test_config_task_stack_covers_measured_save_path();
     test_playlist_routes_protected();
     test_weather_route_requires_session();
     test_weather_proxy_protected_and_exact();

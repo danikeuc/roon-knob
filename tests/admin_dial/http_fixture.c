@@ -17,6 +17,7 @@
 httpd_uri_t routes[40];
 static int fixture_route_capacity=40;
 int route_count,fail_registration=-1,reads,writes,auth_queries,auth_mutations;
+int fixture_http_stack_size;
 char fixture_logs[8192];
 bool configured,valid_session,storage_error;
 bool fixture_socket_ipv6;
@@ -38,6 +39,7 @@ void fixture_reset(void) {
     fixture_socket_ipv6=false;
     fixture_socket_address="192.168.4.1";
     fixture_route_capacity=40;
+    fixture_http_stack_size=0;
     route_count=reads=writes=auth_queries=auth_mutations=elapsed=0;
     fail_registration=-1;
     configured=true;
@@ -68,6 +70,7 @@ int fixture_status(const httpd_req_t *r) {
 }
 esp_err_t httpd_start(httpd_handle_t *h,const httpd_config_t*c) {
     fixture_route_capacity=c->max_uri_handlers;
+    fixture_http_stack_size=c->stack_size;
     assert(c->max_uri_handlers>=route_count);
     *h=(void*)1;
     return 0;
