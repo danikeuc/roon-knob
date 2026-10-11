@@ -106,3 +106,16 @@ BLE-init failure markers. No Wi-Fi IP log line was captured; subsequent admin
 HTTP200 with history markup proved network/admin availability. Authenticated
 history rendering remains pending operator confirmation; no shower actuation
 was requested. Do not infer physical behavior or durable BLE recovery.
+
+### Operator acceptance and publication
+
+On 2026-10-11 the operator confirmed "zgodovina je": shower history is visible
+in admin. This closes the previously pending UI observation for the exact
+v1.3.0-shower.3 CI application identified above. The release was published at
+17:05:18 UTC. Existing tags and the application image are unchanged.
+
+The repeated Pi HISTORY_INSTALLED receipt is the existing 1.3.0 installation,
+not installation of the separate 1.3.1 startup readiness patch. New AUTO/manual
+transitions, cold-boot persistence and permanent BLE reconnect repair are not
+claimed. The optional PR preview hosting failure (Pages HTTP404) remains a
+separate delivery limitation; all six firmware build/test jobs passed.
