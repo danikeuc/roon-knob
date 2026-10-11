@@ -1,6 +1,6 @@
 # Admin and weather presentation candidate, 2026-10-05
 
-Tracking: danikeuc/roon-knob#13; dependencies #9, #11, #12.
+Tracking: issue #13 in this repository; dependencies #9, #11, #12.
 
 The owner approved the four-section dark design (Tuš, Roon, Zaslon, Varnost).
 `web/admin_dial.html` is now the canonical embedded admin page. Regenerate its
