@@ -91,3 +91,18 @@ bypass was added. Shower-tag CI builds remain enabled, but automatic release
 publication and Pages deployment are disabled for these tags so exact firmware
 hardware acceptance precedes manual publication. Dial history acceptance remains
 pending the exact CI artifact installation and browser check.
+
+### Exact Dial installation
+
+Tag v1.3.0-shower.3, source 69cab63b252fca2a1dc25e2c3aaf9153badceb37,
+CI run 38151787261 passed all six build/test jobs. The downloaded CI app SHA256
+50ce9f7518f8227ef576e3807e647cb64c53ecc7488ab2e868c4c2a0caf6163b
+was installed via COM3 on 2026-10-11 at 15:40 UTC. Exact application readback
+matched; NVS/bootloader/partitions/OTA metadata were unchanged before first boot.
+Private full-flash backup remains outside Git and release assets.
+
+60-second serial observation: one application boot, zero panic markers and zero
+BLE-init failure markers. No Wi-Fi IP log line was captured; subsequent admin
+HTTP200 with history markup proved network/admin availability. Authenticated
+history rendering remains pending operator confirmation; no shower actuation
+was requested. Do not infer physical behavior or durable BLE recovery.
