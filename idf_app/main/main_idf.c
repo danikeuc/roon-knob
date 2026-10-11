@@ -17,6 +17,10 @@
 #include "wifi_manager.h"
 #include "valve_client_dial.h"
 #include "valve_ui_dial.h"
+#include "playlist_client_dial.h"
+#include "playlist_ui_dial.h"
+#include "controller_action_router.h"
+#include "admin_settings_dial.h"
 
 #include "lvgl.h"
 
@@ -36,7 +40,7 @@ static const char *TAG = "main";
 // 16 KiB fits after the Dial's LVGL DMA buffers while retaining measured margin.
 #define UI_LOOP_STACK_SIZE (16 * 1024)
 #define UI_LOOP_CORE 1
-#define LVGL_PSRAM_POOL_SIZE (72 * 1024)
+#define LVGL_PSRAM_POOL_SIZE (CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES * 1024)
 
 // UI task handle for display sleep management
 static TaskHandle_t g_ui_task_handle = NULL;
@@ -167,6 +171,7 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
     switch (evt) {
     case RK_NET_EVT_CONNECTING: {
         valve_client_on_disconnect();
+        playlist_client_connected(false);
         valve_ui_connected(false);
         int retry = wifi_mgr_get_retry_count();
         ESP_LOGI(TAG, "WiFi: Connecting... (retry %d)", retry);
@@ -180,6 +185,7 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
 
     case RK_NET_EVT_GOT_IP:
         valve_client_on_reconnect();
+        playlist_client_connected(true);
         valve_ui_connected(true);
         ESP_LOGI(TAG, "WiFi connected with IP: %s", ip_opt ? ip_opt : "unknown");
         stop_wifi_msg_alternation();
@@ -199,6 +205,7 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
     case RK_NET_EVT_NO_AP_FOUND:
     case RK_NET_EVT_AUTH_TIMEOUT: {
         valve_client_on_disconnect();
+        playlist_client_connected(false);
         valve_ui_connected(false);
         int attempt = wifi_mgr_get_retry_count();
         int max = wifi_mgr_get_retry_max();
@@ -211,6 +218,7 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
 
     case RK_NET_EVT_AP_STARTED:
         valve_client_on_disconnect();
+        playlist_client_connected(false);
         valve_ui_connected(false);
         ESP_LOGI(TAG, "WiFi: AP mode started (SSID: hiphi-dial-setup)");
         stop_wifi_msg_alternation();
@@ -244,8 +252,11 @@ static void ui_loop_task(void *arg) {
         platform_input_process_events();
 
         // Process pending display actions (e.g., swipe gestures)
+        admin_settings_process_ui();
         platform_display_process_pending();
 
+        playlist_ui_process();
+        ui_artwork_process();
         valve_ui_process((uint32_t)(esp_timer_get_time() / 1000), !display_is_sleeping());
 
         // Run LVGL task handler
@@ -275,6 +286,7 @@ static void ui_loop_task(void *arg) {
         // mDNS and BLE consume/fragment the remaining internal heap.
         if (atomic_exchange_explicit(&s_config_server_stop_pending, false,
                                      memory_order_acq_rel)) {
+            admin_settings_cancel_ui();
             config_server_stop();
         }
         if (atomic_exchange_explicit(&s_config_server_start_pending, false,
@@ -312,14 +324,9 @@ void app_main(void) {
 
     // Initialize NVS for configuration storage
     esp_err_t err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        esp_err_t erase_err = nvs_flash_erase();
-        if (erase_err != ESP_OK) {
-            ESP_LOGW(TAG, "NVS erase failed, ignoring");
-        }
-        err = nvs_flash_init();
-    }
+    // Fail closed: automatic NVS erasure would remove administrator credentials.
     ESP_ERROR_CHECK(err);
+    admin_settings_init();
 
     // Initialize display hardware (SPI, LCD panel) BEFORE lv_init
     ESP_LOGI(TAG, "Initializing display hardware...");
@@ -363,11 +370,13 @@ void app_main(void) {
     ESP_LOGI(TAG, "Initializing UI...");
     ui_init();
     valve_ui_init();
+    if(!playlist_client_init())ESP_LOGW(TAG,"Playlist worker unavailable");
     log_lvgl_memory("after UI initialization");
     log_memory("after UI initialization");
 
     // Install the controller action handler before input can be processed.
     app_controller_init();
+    controller_action_router_set_playlist_handler(playlist_ui_rotate);
 
     // Initialize input (rotary encoder)
     platform_input_init();
@@ -392,6 +401,10 @@ void app_main(void) {
     // Initialize display sleep management now that UI task is created
     ESP_LOGI(TAG, "Initializing display sleep management");
     platform_display_init_sleep(g_ui_task_handle);
+
+    /* app_main is a background task; storage never runs in ui_loop. */
+    if (admin_settings_restore() != ADMIN_OK)
+        ESP_LOGE(TAG, "Admin settings restore unavailable; START remains gated");
 
     // Start application logic
     ESP_LOGI(TAG, "Starting app...");

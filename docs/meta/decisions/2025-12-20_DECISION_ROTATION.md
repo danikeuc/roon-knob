@@ -1,7 +1,7 @@
 # Decision: Only Support 0° and 180° Display Rotation
 
 **Date:** 2025-12-20
-**Status:** Accepted
+**Status:** Historical decision; superseded for the 2026-10-02 Dial candidate, pending hardware acceptance
 
 ## Context
 
@@ -70,3 +70,24 @@ The primary use case for rotation is mounting the device on a charging stand whe
 3. **Pre-rotated assets**: Have the bridge send pre-rotated album art. Doesn't help because we rotate the entire rendered frame (text, controls, etc.), not just images.
 
 4. **Accept the slowness**: Could ship 90°/270° with known performance issues. Rejected because the poor UX isn't worth supporting an unlikely use case.
+
+## 2026-10-02 Dial candidate decision
+
+The user explicitly confirmed all four angles: 0°, 90°, 180° and 270°. This
+updates the software scope for issue #9 / draft PR #10 on the Waveshare
+ESP32-S3 Dial; the historical two-angle decision and its performance rationale
+above remain as the release-baseline record. The candidate exposes all four
+choices in its local authenticated admin page. A saved angle is a persistent
+local override; before one is saved, bridge/charger legacy 0°/180° behavior
+continues. The software maps touch coordinates and gestures to the chosen
+orientation and cancels an in-progress hold/press until physical release.
+
+The candidate uses bounded software rotation blocks in PSRAM scratch, copies
+them into an internal DMA-capable buffer for LCD transfer, and waits for the
+transfer to drain before buffer reuse. Host geometry, flush and input tests
+pass for the four angles. They do not establish real 90°/270° frame time,
+free heap/stack under Wi-Fi/BLE, touch feel, charger behavior, artwork or
+sustained responsiveness on the exact image. Measure and compare 90°/270°
+with 0°/180° on hardware before removing draft status; reject a freezing UI
+or failed memory gate. This decision does not authorize flashing, physical
+valve operation or deployment.

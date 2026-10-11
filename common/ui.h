@@ -47,3 +47,7 @@ void ui_set_valve_active(bool active);  // Fresh timed valve interval indicator 
 #ifdef __cplusplus
 }
 #endif
+
+bool ui_playlist_touch_allowed(int x,int y);
+
+void ui_artwork_process(void);

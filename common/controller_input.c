@@ -18,7 +18,7 @@ static atomic_uint_least32_t s_control_overflow;
 
 static bool context_is_valid(controller_interaction_context_t context) {
     return context >= CONTROLLER_INTERACTION_CONTEXT_MEDIA &&
-           context <= CONTROLLER_INTERACTION_CONTEXT_SETTINGS_RECOVERY;
+           context <= CONTROLLER_INTERACTION_CONTEXT_PLAYLIST_PICKER;
 }
 
 static bool command_is_valid(const controller_command_t *command) {
@@ -44,6 +44,7 @@ static bool action_is_valid(const controller_action_t *action) {
     case CONTROLLER_ACTION_SELECT_ZONE_PICKER:
     case CONTROLLER_ACTION_SHOW_SETTINGS:
         return action->value.picker_delta == 0;
+    case CONTROLLER_ACTION_SCROLL_PLAYLIST_PICKER:
     case CONTROLLER_ACTION_SCROLL_ZONE_PICKER:
         return action->value.picker_delta != 0;
     case CONTROLLER_ACTION_SYSTEM:
@@ -196,13 +197,13 @@ static bool resolve_binding(const controller_input_descriptor_t *descriptor,
         return resolve_volume_ticks(event->value, out_action);
 
     case CONTROLLER_INPUT_TRANSFORM_ROTATION_DIRECTION:
-        if (binding->action.kind !=
-                CONTROLLER_ACTION_SCROLL_ZONE_PICKER ||
+        if ((binding->action.kind != CONTROLLER_ACTION_SCROLL_ZONE_PICKER &&
+             binding->action.kind != CONTROLLER_ACTION_SCROLL_PLAYLIST_PICKER) ||
             event->value == 0) {
             return false;
         }
-        *out_action =
-            controller_action_picker_scroll(event->value > 0 ? 1 : -1);
+        *out_action=binding->action;
+        out_action->value.picker_delta=event->value>0?1:-1;
         return true;
 
     default:
@@ -294,6 +295,13 @@ bool controller_input_resolve_control(
         }
     }
 
+    if (context == CONTROLLER_INTERACTION_CONTEXT_PLAYLIST_PICKER) {
+        if (intent != CONTROLLER_CONTROL_INTENT_VOLUME_UP && intent != CONTROLLER_CONTROL_INTENT_VOLUME_DOWN) return false;
+        *out_action=controller_action_simple(CONTROLLER_ACTION_SCROLL_PLAYLIST_PICKER);
+        out_action->value.picker_delta=intent==CONTROLLER_CONTROL_INTENT_VOLUME_UP?1:-1;
+        return true;
+    }
+
     /*
      * Preserve the legacy non-picker behavior for both media and
      * settings/recovery until a separately characterized UX change says
@@ -327,7 +335,8 @@ bool controller_input_resolve_control(
 }
 
 bool controller_input_dispatch_action(const controller_action_t *action) {
-    return action_is_valid(action) && s_action_handler &&
+    return !(s_context==CONTROLLER_INTERACTION_CONTEXT_PLAYLIST_PICKER && action && action->kind==CONTROLLER_ACTION_COMMAND) &&
+           action_is_valid(action) && s_action_handler &&
            s_action_handler(action);
 }
 

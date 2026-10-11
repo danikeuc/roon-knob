@@ -1,5 +1,9 @@
 # HiPhi Dial
 
+Custom valve Dial weather and playlist favorites are a local repository candidate. See [operations and exact evidence](docs/operations/playlist-favorites.md); full CI, deployment and physical acceptance remain pending.
+
+Paired system release: [v1.1.0 — mobile admin and timed shower settings](docs/releases/v1.1.0.md).
+
 Custom firmware and a companion service that turn a [Waveshare ESP32-S3 Knob](https://www.waveshare.com/esp32-s3-knob-touch-lcd-1.8.htm) into a dedicated hi-fi controller.
 
 See what's playing, adjust volume, skip tracks, and switch zones—all from a physical knob on your desk.

@@ -1,6 +1,7 @@
 #include "valve_config_dial.h"
 
 #include <string.h>
+#include <stdio.h>
 #include <stdatomic.h>
 
 static atomic_uint s_generation;
@@ -84,7 +85,7 @@ static bool store_activate(const char *seal) {
 static bool store_clear(void) {
     return fake_nvs_erase(VALVE_NVS_URL) == 0 &&
            fake_nvs_erase(VALVE_NVS_TOKEN) == 0 &&
-           fake_nvs_erase(VALVE_NVS_SEAL) == 0 && fake_nvs_commit() == 0;
+           fake_nvs_erase(VALVE_NVS_SEAL) == 0 && fake_nvs_erase("weather_private") == 0 && fake_nvs_commit() == 0;
 }
 #else
 static bool store_read(const char *key, char *value, size_t capacity) {
@@ -214,4 +215,48 @@ bool valve_config_clear(void) {
     bool ok = config_clear();
     atomic_fetch_add(&s_generation, 1);
     return ok;
+}
+
+/* One independently atomic blob binds the restricted weather credential to its
+ * intended Pi URL. Blank provisioning preserves it; changing URL without
+ * reprovisioning leaves weather unavailable, preventing disclosure to a new host. */
+#define WEATHER_NVS_KEY "weather_private"
+bool valve_config_weather_load(char *base_url,size_t url_len,char *token,size_t token_len) {
+    if(base_url && url_len)base_url[0]=0;
+    if(token && token_len)token[0]=0;
+    if(!base_url||!token||url_len<VALVE_CONFIG_URL_LEN||token_len<VALVE_CONFIG_TOKEN_LEN)return false;
+    char display[VALVE_CONFIG_TOKEN_LEN]={0},record[VALVE_SEAL_LEN]={0};
+    bool ok=valve_config_load(base_url,url_len,display,sizeof display) && store_read(WEATHER_NVS_KEY,record,sizeof record);
+    char *separator=ok?strchr(record,'\n'):NULL;
+    if(separator) {
+        *separator=0;
+        ok=!strcmp(base_url,record)&&valid_token(separator+1)&&strcmp(display,separator+1);
+        if(ok)strcpy(token,separator+1);
+    } else ok=false;
+    if(!ok)base_url[0]=0;
+    memset(display,0,sizeof display);memset(record,0,sizeof record);return ok;
+}
+static bool weather_store(const char *url,const char *token) {
+    char record[VALVE_SEAL_LEN],verify[VALVE_SEAL_LEN];
+    int n=snprintf(record,sizeof record,"%s\n%s",url,token);
+    if(n<0 || (size_t)n>=sizeof record)return false;
+#ifdef VALVE_CONFIG_HOST_TEST
+    bool ok=fake_nvs_set(WEATHER_NVS_KEY,record)==0 && fake_nvs_commit()==0;
+#else
+    nvs_handle_t handle;
+    bool ok=nvs_open(VALVE_NVS_NAMESPACE,NVS_READWRITE,&handle)==ESP_OK;
+    if(ok) {
+        ok=nvs_set_blob(handle,WEATHER_NVS_KEY,record,(size_t)n+1)==ESP_OK && nvs_commit(handle)==ESP_OK;
+        nvs_close(handle);
+    }
+#endif
+    ok=ok && store_read(WEATHER_NVS_KEY,verify,sizeof verify) && !strcmp(record,verify);
+    memset(record,0,sizeof record);memset(verify,0,sizeof verify);return ok;
+}
+bool valve_config_save_weather(const char *url,const char *display,const char *weather) {
+    if(!weather || !valid_url(url)||!valid_token(display) ||
+        (*weather && (!valid_token(weather)||!strcmp(display,weather))) || !begin_change())return false;
+    bool ok=config_save(url,display);
+    if(ok && *weather)ok=weather_store(url,weather);
+    atomic_fetch_add(&s_generation,1);return ok;
 }

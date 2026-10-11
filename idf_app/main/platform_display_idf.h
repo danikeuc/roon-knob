@@ -25,8 +25,17 @@ void platform_display_init_sleep(TaskHandle_t lvgl_task_handle);
 // Process any pending display actions (call from UI loop)
 void platform_display_process_pending(void);
 
+/* UI-task-only transaction hooks: allocation-free and nonblocking. */
+bool platform_display_try_rotation(uint16_t degrees);
+uint16_t platform_display_rotation_get(void);
+bool platform_display_rotation_override_get(void);
+void platform_display_rotation_override_set(bool enabled);
+void platform_display_cancel_input(void);
+
 // Set display rotation (0, 90, 180, 270 degrees)
 // @param degrees Rotation in degrees (0, 90, 180, 270)
 void platform_display_set_rotation(uint16_t degrees);
 
 #endif // PLATFORM_DISPLAY_IDF_H
+
+void platform_display_playlist_transition(void);

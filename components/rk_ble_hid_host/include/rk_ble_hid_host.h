@@ -126,6 +126,14 @@ rk_ble_hid_host_result_t rk_ble_hid_host_status_copy(rk_ble_hid_host_status_t *o
 bool rk_ble_hid_host_map_consumer_report(const uint8_t *data, size_t len,
                                          rk_ble_media_key_t *key);
 
+/** Decode a device report. QGSQ Consumer Control report 1 is a two-byte
+ * bitmap, verified with physical button captures. held_key belongs to one
+ * connection, starts at NONE and suppresses repeats until release/change.
+ * Other devices retain the legacy usage-ID mapping. */
+bool rk_ble_hid_host_map_device_report(const char *name, bool media_usage_supported,
+    uint8_t report_id, const uint8_t *data, size_t len,
+    rk_ble_media_key_t *held_key, rk_ble_media_key_t *key);
+
 #ifdef __cplusplus
 }
 #endif

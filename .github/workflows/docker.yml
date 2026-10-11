@@ -3,7 +3,8 @@ name: Build and Release
 on:
   push:
     branches: [master, main]
-    tags: ['v*']
+    # These system releases preserve manually published, hardware-tested shower bundles.
+    tags: ['v*', '!v1.0.0', '!v1.1.0']
   pull_request:
     branches: ['**']
 
@@ -69,6 +70,8 @@ jobs:
             frame_app/main/platform_provisioning_frame.c \
             -o /tmp/test-provisioning-adapter-frame
           /tmp/test-provisioning-adapter-frame
+          cc -std=c11 -Wall -Wextra -Werror -Icommon tests/test_controller_playlist.c common/controller_playlist.c -o /tmp/test-controller-playlist
+          /tmp/test-controller-playlist
           sh tests/run_wifi_provisioning_lifecycle.sh
           cc -std=c11 -Wall -Wextra -Werror -pedantic -pthread \
             -Icommon -Iinclude \
@@ -286,6 +289,29 @@ jobs:
             -o /tmp/test-rk-ble-hid-stub
           /tmp/test-rk-ble-hid-stub
 
+  test-dial-admin:
+    name: test-dial-admin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Test Dial admin and valve contracts with ESP-IDF 5.5.5
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.5
+          target: esp32s3
+          path: idf_app
+          command: >-
+            set -eu;
+            test "$(idf.py --version)" = "ESP-IDF v5.5.5";
+            cd ..;
+            test -f "$IDF_PATH/components/mbedtls/mbedtls/library/pkcs5.c";
+            sh scripts/test_admin_dial.sh;
+            sh scripts/test_valve_dial.sh;
+            sh scripts/test_playlist_dial.sh
+
   build-idf:
     name: build-idf
     runs-on: ubuntu-latest
@@ -350,8 +376,8 @@ jobs:
             grep -Fx "CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y" sdkconfig;
             grep -Fx "CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=49152" sdkconfig;
             grep -Fx "CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y" sdkconfig;
-            grep -Fx "CONFIG_LV_MEM_SIZE_KILOBYTES=24" sdkconfig;
-            grep -Fx "CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=72" sdkconfig;
+            grep -Fx "CONFIG_LV_MEM_SIZE_KILOBYTES=8" sdkconfig;
+            grep -Fx "CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=88" sdkconfig;
             grep -Fx "CONFIG_RK_BLE_HID_HOST=y" sdkconfig;
             grep -Fx "CONFIG_BT_ENABLED=y" sdkconfig;
             grep -Fx "CONFIG_BT_NIMBLE_ENABLED=y" sdkconfig;
@@ -614,8 +640,8 @@ jobs:
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [test-shared, build-idf, build-frame, build-rlcd, build-ble-off]
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test-shared, test-dial-admin, build-idf, build-frame, build-rlcd, build-ble-off]
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-shower.')
     permissions:
       contents: write
     steps:
@@ -785,7 +811,7 @@ jobs:
   deploy-pr-preview:
     name: Deploy All PR Firmware Previews
     runs-on: ubuntu-latest
-    needs: [test-shared, build-idf, build-frame, build-rlcd, build-ble-off]
+    needs: [test-shared, test-dial-admin, build-idf, build-frame, build-rlcd, build-ble-off]
     if: github.event_name == 'pull_request'
     permissions:
       contents: write
@@ -1079,7 +1105,7 @@ jobs:
     name: Deploy to GitHub Pages
     runs-on: ubuntu-latest
     needs: [release]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-shower.')
     permissions:
       contents: write
     steps:

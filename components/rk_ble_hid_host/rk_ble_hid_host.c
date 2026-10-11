@@ -132,6 +132,7 @@ typedef struct {
 
     /* Everything below is owner-owned unless guarded by device_lock. */
     bool stack_started;
+    rk_ble_media_key_t qgsq_held_key;
     bool hidh_started;
     bool host_started;
     bool stop_requested;
@@ -686,7 +687,11 @@ static void start_stack(void) {
     if (s.fatal_teardown || s.stack_started) return;
     set_state(RK_BLE_HID_HOST_STATE_STARTING, RK_BLE_HID_HOST_ERROR_NONE);
     log_memory("before nimble_port_init");
-    if (nimble_port_init() != ESP_OK) {
+    const esp_err_t init_result = nimble_port_init();
+    if (init_result != ESP_OK) {
+        ESP_LOGE(TAG, "NimBLE port init failed: %s (%d)",
+                 esp_err_to_name(init_result), (int)init_result);
+        log_memory("after failed nimble_port_init");
         schedule_start_retry(RK_BLE_HID_HOST_ERROR_NIMBLE_INIT, false);
         return;
     }
@@ -1118,6 +1123,7 @@ static void process_event(const service_event_t *event) {
         }
         break;
     case EVENT_OPEN:
+        s.qgsq_held_key = RK_BLE_MEDIA_KEY_NONE;
         s.open_event_seen_generation = s.opening_generation;
         if (s.connect_callback_pending &&
             s.connect_callback_generation == s.opening_generation) {
@@ -1186,6 +1192,7 @@ static void process_event(const service_event_t *event) {
         break;
     }
     case EVENT_CLOSE:
+        s.qgsq_held_key = RK_BLE_MEDIA_KEY_NONE;
         if (event->data.close.tracked) {
             acknowledge_close_event();
         }
@@ -1209,8 +1216,15 @@ static void process_event(const service_event_t *event) {
         break;
     case EVENT_INPUT: {
         rk_ble_media_key_t key;
-        const bool mapped = rk_ble_hid_host_map_consumer_report(
-            event->data.input.data, event->data.input.len, &key);
+        /* QGSQ reports can change metadata after reconnect, including release.
+         * Its exact name, report ID, length and five payloads remain checked. */
+        const bool mapped = rk_ble_hid_host_map_device_report(
+            s.status.active_name,
+            event->data.input.usage == ESP_HID_USAGE_CCONTROL ||
+                (event->data.input.usage == ESP_HID_USAGE_GENERIC &&
+                 strcmp(s.status.active_name, "QGSQ") == 0),
+            event->data.input.report_id, event->data.input.data,
+            event->data.input.len, &s.qgsq_held_key, &key);
 
         /* ESP-IDF 5.5 can classify a valid Consumer Control report as GENERIC
          * when its HID report-map metadata is incomplete. The proven Frame

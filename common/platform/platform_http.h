@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdbool.h>
 
 #define PLATFORM_HTTP_JSON_MAX_BYTES (256U * 1024U)
 
@@ -19,3 +20,7 @@ void platform_http_free(char *p);
  * @param len Buffer length
  */
 void platform_http_get_knob_id(char *out, size_t len);
+
+#if defined(RK_CUSTOM_VALVE_FIRMWARE) && RK_CUSTOM_VALVE_FIRMWARE
+int platform_http_get_dial_artwork(const char *,char **,size_t *,bool (*)(void *),void *);
+#endif

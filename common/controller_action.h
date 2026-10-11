@@ -23,6 +23,7 @@ typedef enum {
     CONTROLLER_ACTION_SELECT_ZONE_PICKER,
     CONTROLLER_ACTION_SHOW_SETTINGS,
     CONTROLLER_ACTION_SYSTEM,
+    CONTROLLER_ACTION_SCROLL_PLAYLIST_PICKER,
     /*
      * Reserved for #170/#194 Slice C. Slice A has no adaptive action table,
      * so the router must reject this kind.

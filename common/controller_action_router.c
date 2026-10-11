@@ -11,6 +11,9 @@
 #define ZONE_ID_BACK "__back__"
 #define ZONE_ID_SETTINGS "__settings__"
 
+static void (*s_playlist_handler)(int);
+void controller_action_router_set_playlist_handler(void (*handler)(int)){s_playlist_handler=handler;}
+
 static const char *const s_back_name = "Back";
 static const char *const s_back_id = ZONE_ID_BACK;
 static const char *const s_settings_name = "Settings";
@@ -161,6 +164,7 @@ bool controller_action_router_handle(const controller_action_t *action) {
 
     switch (action->kind) {
     case CONTROLLER_ACTION_COMMAND:
+        if(controller_input_get_context()==CONTROLLER_INTERACTION_CONTEXT_PLAYLIST_PICKER)return false;
         if (action->value.command.kind <= CONTROLLER_COMMAND_NONE ||
             action->value.command.kind >
                 CONTROLLER_COMMAND_ADJUST_VOLUME_STEPS ||
@@ -205,6 +209,10 @@ bool controller_action_router_handle(const controller_action_t *action) {
         controller_presentation_show_settings();
         return controller_input_set_context(
             CONTROLLER_INTERACTION_CONTEXT_SETTINGS_RECOVERY);
+
+    case CONTROLLER_ACTION_SCROLL_PLAYLIST_PICKER:
+        if(controller_input_get_context()!=CONTROLLER_INTERACTION_CONTEXT_PLAYLIST_PICKER||!action->value.picker_delta||!s_playlist_handler)return false;
+        s_playlist_handler(action->value.picker_delta);return true;
 
     case CONTROLLER_ACTION_SYSTEM:
         return false;

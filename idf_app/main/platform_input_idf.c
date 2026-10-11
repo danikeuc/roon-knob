@@ -1,3 +1,4 @@
+#include "admin_settings_dial.h"
 #include "platform/platform_input.h"
 #include "controller_input.h"
 #include "controller_input_mailbox.h"
@@ -13,11 +14,14 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdatomic.h>
 
 static const char *TAG = "input";
 
 // Input event queue (for ISR-safe dispatch)
 static QueueHandle_t s_input_queue = NULL;
+typedef struct { int ticks;unsigned generation; } encoder_batch_t;
+static atomic_uint encoder_generation;
 static portMUX_TYPE s_stats_lock = portMUX_INITIALIZER_UNLOCKED;
 static controller_input_mailbox_stats_t s_mailbox_stats;
 static uint32_t s_last_logged_overflow;
@@ -140,6 +144,7 @@ static void process_encoder_channel(uint8_t current_level, uint8_t *prev_level,
 }
 
 static void encoder_read_and_dispatch(void) {
+    unsigned generation=atomic_load(&encoder_generation);
     static int last_count = 0;
 
     // Read current levels
@@ -160,7 +165,7 @@ static void encoder_read_and_dispatch(void) {
         // Queue the delta - main loop will coalesce multiple deltas
         // Note: esp_timer callbacks run in task context, not ISR, so use xQueueSend
         record_queue_result(
-            xQueueSend(s_input_queue, &delta, 0) == pdTRUE);
+            xQueueSend(s_input_queue, &((encoder_batch_t){delta,generation}), 0) == pdTRUE);
     }
 }
 
@@ -206,7 +211,7 @@ void platform_input_init(void) {
     s_last_logged_overflow = 0;
 
     // Create input event queue (holds up to 10 batched tick counts)
-    s_input_queue = xQueueCreate(10, sizeof(int));
+    s_input_queue = xQueueCreate(10, sizeof(encoder_batch_t));
     if (!s_input_queue) {
         ESP_LOGE(TAG, "Failed to create input event queue");
         return;
@@ -234,14 +239,15 @@ void platform_input_process_events(void) {
         return;
     }
 
-    int ticks;
+    encoder_batch_t batch;
     int32_t total_ticks = 0;
     uint32_t drained = 0;
 
     // Drain all queued batches and coalesce into single total
     // This prevents HTTP request queue buildup when turning quickly
-    while (xQueueReceive(s_input_queue, &ticks, 0) == pdTRUE) {
-        total_ticks = controller_input_saturating_add(total_ticks, ticks);
+    while (xQueueReceive(s_input_queue, &batch, 0) == pdTRUE) {
+        if(batch.generation!=atomic_load(&encoder_generation))continue;
+        total_ticks = controller_input_saturating_add(total_ticks, batch.ticks);
         drained++;
     }
     if (drained > 1) {
@@ -261,7 +267,7 @@ void platform_input_process_events(void) {
         if (display_get_state() != DISPLAY_STATE_NORMAL) valve_ui_wake();
         display_activity_detected();  // Wake display and reset sleep timers
 
-        if (valve_ui_visible()) return;  // Encoder controls Roon only.
+        if (admin_settings_input_blocked() || valve_ui_visible()) return;  // Encoder controls Roon only.
 
         // Suppress encoder events right after deep sleep wake
         // (the encoder tick that woke us shouldn't change volume)
@@ -309,3 +315,5 @@ void platform_input_shutdown(void) {
 
     ESP_LOGI(TAG, "Platform input shutdown complete");
 }
+
+void platform_input_fence(void){atomic_fetch_add(&encoder_generation,1);if(s_input_queue)xQueueReset(s_input_queue);}

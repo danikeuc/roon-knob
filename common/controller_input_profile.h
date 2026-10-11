@@ -10,6 +10,7 @@ extern "C" {
 
 /*
  * Immutable controls and default bindings selected by the firmware target.
+ * Custom Dial profiles may map PLAYLIST_PICKER rotation to selection only.
  * The returned storage has static lifetime.
  */
 const controller_input_descriptor_t *controller_input_profile_descriptors(
