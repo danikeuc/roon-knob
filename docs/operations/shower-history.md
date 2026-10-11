@@ -38,8 +38,8 @@ fail-closed audit persistence policy; a disk error can prevent its own fault row
 
 Requires coordinated Pi package + nginx history route and Dial application
 firmware. Bridge/Synology changes are not required. Reuse the existing weather
-credential; do not create another secret. Current packages retain their prior
-version numbers and are development candidates, not a new release.
+credential; do not create another secret. Pi package version is 1.3.0. The companion release uses a distinct
+`v1.3.0-shower.N` tag to preserve the historical v1.3.0 tag.
 
 No deployment or hardware acceptance is claimed by this implementation. Follow
 the project commissioning procedure for backups, disconnected valve power,
@@ -69,3 +69,25 @@ unavailable/malformed data, late response after logout and mobile width.
 Engineering handoff: **READY_FOR_INDEPENDENT_REVIEW**; installation and exact
 artifact hardware acceptance remain separate. Existing unrelated local source
 changes are preserved and included in the candidate firmware baseline.
+## Installation and release checks, 2026-10-11
+
+The operator reported `HISTORY_INSTALLED` for Pi source
+`b1e244758553b10052909804d7ddca4610b3a207`, wheel SHA256
+`96b91ce525394d25183473ee6116474c64e411138a1236b06396f1135a99f982`.
+Both local and nginx history routes returned two rows; USER_OFF/DRAIN and
+GPIO26/GPIO20 high were verified by the installer. Backup:
+`/root/freeze-before-history-a258zuv0`. The deployed source checkout remains
+`d0dfeac61856e0ff716e700348be61709dc68505`; the wheel identity is separate.
+
+Before installation, the Hub had latched startup_drain_failed because Node-RED
+refused both startup connections at 14:00:45 UTC. Explicit authenticated
+CLEAR_FAULT confirmed DRAIN and restored USER_OFF. Startup readiness is a
+remaining separate repair; history installation does not fix that boot race.
+
+Release CI now checks the existing 8 KiB internal / 88 KiB PSRAM LVGL profile,
+matching sdkconfig.defaults. The five existing admin-zone/input includes are
+recorded individually in expected_edges; no forbidden-edge exception or checker
+bypass was added. Shower-tag CI builds remain enabled, but automatic release
+publication and Pages deployment are disabled for these tags so exact firmware
+hardware acceptance precedes manual publication. Dial history acceptance remains
+pending the exact CI artifact installation and browser check.
