@@ -1,4 +1,6 @@
 #include "http_fixture.h"
+#include "controller_input.h"
+extern controller_interaction_context_t fixture_context;
 #include "config_server.h"
 #include "captive_portal.h"
 #include <assert.h>
@@ -546,6 +548,47 @@ static void test_weather_proxy_protected_and_exact(void) {
     unsigned prior=weather_gets;fixture_call(&r);assert(fixture_status(&r)==401 && weather_gets==prior);
     config_server_stop();weather_admin_test_transport(NULL,NULL);
 }
+
+static unsigned history_http_calls;
+static int history_http_status=200;
+static bool history_http_expire;
+static const char *history_http_offset="0";
+static int history_http_transport(const char *method,const char *url,const char *header,const char *token,
+    const char *body,size_t length,int *status,char *out,size_t capacity,size_t *used,void *context) {
+    (void)context;history_http_calls++;
+    assert(!strcmp(method,"GET")&&!body&&!length);
+    char expected[128];snprintf(expected,sizeof expected,"http://192.0.2.10:8081/api/v1/display/history?offset=%s",history_http_offset);
+    assert(!strcmp(url,expected)&&!strcmp(header,"X-Weather-Settings-Token")&&!strcmp(token,"private-weather-http"));
+    if(history_http_expire)fixture_expire();
+    *status=history_http_status;
+    int n=snprintf(out,capacity,"{\"items\":[],\"offset\":%s,\"has_more\":false}",history_http_offset);
+    assert(n>0&&(size_t)n<capacity);*used=(size_t)n;return 0;
+}
+static void test_history_http(void) {
+    for(int ap=0;ap<2;ap++) {
+        fixture_reset();if(ap)assert(captive_portal_start());else config_server_start();
+        weather_admin_test_transport(history_http_transport,NULL);history_http_calls=0;history_http_status=200;history_http_expire=false;history_http_offset="0";
+        httpd_req_t r=fixture_request("/admin/api/shower-history",HTTP_GET,NULL);fixture_call(&r);assert(fixture_status(&r)==401&&!history_http_calls);
+        login();r=fixture_request("/admin/api/shower-history",HTTP_GET,NULL);r.cookie=cookie;fixture_call(&r);
+        assert(fixture_status(&r)==200&&history_http_calls==1&&strstr(r.response,"\"items\":[]")&&!strstr(r.response,"private"));
+        const char *bad[]={"","-1","1000001","1.0","1e1","0&offset=1","%30","99999999999999999","0&token=x"};
+        unsigned before=history_http_calls;
+        for(unsigned i=0;i<sizeof bad/sizeof bad[0];i++) {
+            char uri[128];snprintf(uri,sizeof uri,"/admin/api/shower-history?offset=%s",bad[i]);
+            r=fixture_request(uri,HTTP_GET,NULL);r.cookie=cookie;fixture_call(&r);assert(fixture_status(&r)==422&&history_http_calls==before);
+        }
+        r=fixture_request("/admin/api/shower-history?limit=1",HTTP_GET,NULL);r.cookie=cookie;fixture_call(&r);assert(fixture_status(&r)==422&&history_http_calls==before);
+        history_http_offset="10";r=fixture_request("/admin/api/shower-history?offset=10",HTTP_GET,NULL);r.cookie=cookie;fixture_call(&r);assert(fixture_status(&r)==200&&strstr(r.response,"\"offset\":10"));
+        history_http_offset="1000000";r=fixture_request("/admin/api/shower-history?offset=1000000",HTTP_GET,NULL);r.cookie=cookie;fixture_call(&r);assert(fixture_status(&r)==200);
+        history_http_offset="0";history_http_status=404;r=fixture_request("/admin/api/shower-history",HTTP_GET,NULL);r.cookie=cookie;fixture_call(&r);assert(fixture_status(&r)==503&&!strstr(r.response,"items"));history_http_status=200;
+        before=history_http_calls;r=fixture_request("/admin/api/shower-history",HTTP_GET,NULL);r.cookie=cookie;r.host="evil.test";fixture_call(&r);assert(fixture_status(&r)==403&&before==history_http_calls);
+        r=fixture_request("/admin/api/shower-history",HTTP_POST,"{}");r.cookie=cookie;r.csrf=csrf;fixture_call(&r);assert(fixture_status(&r)!=200&&before==history_http_calls);
+        history_http_expire=true;r=fixture_request("/admin/api/shower-history",HTTP_GET,NULL);r.cookie=cookie;fixture_call(&r);assert(fixture_status(&r)==401&&!strstr(r.response,"items"));
+        assert(!strstr(fixture_logs,"private-weather-http"));
+        if(ap)captive_portal_stop();else config_server_stop();
+    }
+    weather_admin_test_transport(NULL,NULL);
+}
 static void test_weather_route_requires_session(void) {
     fixture_reset(); config_server_start();
     httpd_req_t r=fixture_request("/admin/api/weather",HTTP_GET,NULL);
@@ -556,7 +599,7 @@ static void test_weather_route_requires_session(void) {
 static void test_playlist_routes_protected(void) {
  for(int ap=0;ap<2;ap++) {
   fixture_reset();if(ap)assert(captive_portal_start());else config_server_start();
-  assert(route_count<=28);printf("playlist %s routes: %d / 28\n",ap?"AP":"STA",route_count);
+  assert(route_count<=31);printf("playlist %s routes: %d / 31\n",ap?"AP":"STA",route_count);
   const char *paths[]={"/admin/api/roon/playlists","/admin/api/roon/favorites"};
   for(unsigned i=0;i<2;i++){httpd_req_t r=fixture_request(paths[i],HTTP_GET,NULL);fixture_call(&r);assert(fixture_status(&r)==401);}
   login();httpd_req_t r=fixture_request(paths[1],HTTP_PUT,"{}");r.cookie=cookie;r.csrf="bad";fixture_call(&r);assert(fixture_status(&r)==403);
@@ -565,9 +608,59 @@ static void test_playlist_routes_protected(void) {
   if(ap)captive_portal_stop();else config_server_stop();
  }
 }
+static void test_ble_scan_requires_ready(void) {
+    fixture_reset(); config_server_start(); login();
+    fixture_ble_status.enabled=true;
+    const rk_ble_hid_host_state_t states[]={
+        RK_BLE_HID_HOST_STATE_ERROR, RK_BLE_HID_HOST_STATE_STARTING,
+        RK_BLE_HID_HOST_STATE_STOPPING, RK_BLE_HID_HOST_STATE_CONNECTING,
+        RK_BLE_HID_HOST_STATE_SCANNING, RK_BLE_HID_HOST_STATE_READY};
+    for(unsigned i=0;i<sizeof states/sizeof states[0];i++) {
+        fixture_ble_status.state=states[i];
+        fixture_ble_status.last_error=states[i]==RK_BLE_HID_HOST_STATE_ERROR
+            ?RK_BLE_HID_HOST_ERROR_NIMBLE_INIT:RK_BLE_HID_HOST_ERROR_NONE;
+        httpd_req_t r=fixture_request("/ble",HTTP_GET,NULL); r.cookie=cookie;
+        fixture_call(&r); assert(fixture_status(&r)==200);
+        const char *form=strstr(r.response,"action='/ble-scan'"); assert(form);
+        const char *button=strstr(form,"<button"); assert(button);
+        const char *end=strchr(button,'>'); assert(end);
+        const char *disabled=strstr(button," disabled");
+        assert((disabled && disabled<end)==(states[i]!=RK_BLE_HID_HOST_STATE_READY));
+        if(states[i]==RK_BLE_HID_HOST_STATE_ERROR)
+            assert(strstr(r.response,"Technical error:"));
+    }
+    config_server_stop();
+}
+
+static void test_zone_selection_authenticated_actor(void) {
+ fixture_reset();config_server_start();
+ httpd_req_t req=fixture_request("/admin/api/roon/zones",HTTP_GET,NULL);fixture_call(&req);assert(fixture_status(&req)==401);
+ login();fixture_zones_online=true;
+ req=fixture_request("/admin/api/roon/zones",HTTP_GET,NULL);req.cookie=cookie;fixture_call(&req);assert(fixture_status(&req)==200);assert(strstr(req.response,"roon:living")&&!strstr(req.response,"upnp:other"));
+ const char *body="{\"zone_id\":\"roon:living\",\"expected_current_zone_id\":\"roon:sauna\"}";
+ req=fixture_request("/admin/api/roon/zone",HTTP_PUT,body);req.cookie=cookie;req.csrf="bad";fixture_call(&req);assert(fixture_status(&req)==403&&fixture_zone_changes==0);
+
+ const char *invalid[]={"{\"zone_id\":\"roon:missing\",\"expected_current_zone_id\":\"roon:sauna\"}","{\"zone_id\":\"upnp:other\",\"expected_current_zone_id\":\"roon:sauna\"}","{\"zone_id\":\"roon:living\",\"zone_id\":\"roon:sauna\",\"expected_current_zone_id\":\"roon:sauna\"}"};
+ for(unsigned i=0;i<3;i++){req=fixture_request("/admin/api/roon/zone",HTTP_PUT,invalid[i]);req.cookie=cookie;req.csrf=csrf;fixture_call(&req);assert(fixture_status(&req)==400&&fixture_zone_changes==0);}
+ req=fixture_request("/admin/api/roon/zone",HTTP_PUT,body);req.cookie=cookie;req.csrf=csrf;fixture_call(&req);assert(fixture_status(&req)==200&&fixture_zone_changes==1);assert(strstr(req.response,"roon:living"));assert(fixture_context==CONTROLLER_INTERACTION_CONTEXT_SETTINGS_RECOVERY);
+ req=fixture_request("/admin/api/roon/zone",HTTP_PUT,body);req.cookie=cookie;req.csrf=csrf;fixture_call(&req);assert(fixture_status(&req)==409&&fixture_zone_changes==1);
+ strcpy(fixture_current_zone,"roon:sauna");fixture_zone_persist=false;
+ req=fixture_request("/admin/api/roon/zone",HTTP_PUT,body);req.cookie=cookie;req.csrf=csrf;fixture_call(&req);assert(fixture_status(&req)==503);assert(!strcmp(fixture_current_zone,"roon:sauna"));
+ fixture_zone_persist=true;fixture_zone_queue=false;int changes=fixture_zone_changes;
+ req=fixture_request("/admin/api/roon/zone",HTTP_PUT,body);req.cookie=cookie;req.csrf=csrf;fixture_call(&req);assert(fixture_status(&req)==503&&fixture_zone_changes==changes);
+ fixture_zone_queue=true;fixture_zone_delay=true;
+ req=fixture_request("/admin/api/roon/zone",HTTP_PUT,body);req.cookie=cookie;req.csrf=csrf;fixture_call(&req);assert(fixture_status(&req)==503);fixture_run_zone_job();assert(fixture_zone_changes==changes);
+ fixture_zone_delay=false;fixture_zones_online=false;
+ req=fixture_request("/admin/api/roon/zone",HTTP_PUT,body);req.cookie=cookie;req.csrf=csrf;fixture_call(&req);assert(fixture_status(&req)==503&&fixture_zone_changes==changes);
+ config_server_stop();
+}
+
 int main(void) {
+    test_zone_selection_authenticated_actor();
+    test_ble_scan_requires_ready();
     test_config_task_stack_covers_measured_save_path();
     test_playlist_routes_protected();
+    test_history_http();
     test_weather_route_requires_session();
     test_weather_proxy_protected_and_exact();
     test_ipv4_host_on_dual_stack_socket();

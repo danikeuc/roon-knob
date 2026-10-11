@@ -32,13 +32,13 @@
 
 static atomic_uint fake_now = ATOMIC_VAR_INIT(1000);
 static int gets, valve_indicator;
-static lv_obj_t objects[80];
+static lv_obj_t objects[160];
 static unsigned object_count;
 static lv_obj_t screen;
 uint64_t combined_clock_ms(void) {return fake_now;}
 static uint64_t client_clock(void) {return fake_now;}
 lv_obj_t *lv_screen_active(void) { return &screen; }
-lv_obj_t *lv_obj_create(lv_obj_t *p) { (void)p; assert(object_count < 80); return &objects[object_count++]; }
+lv_obj_t *lv_obj_create(lv_obj_t *p) { (void)p; assert(object_count < 160); return &objects[object_count++]; }
 lv_obj_t *lv_label_create(lv_obj_t *p) { return lv_obj_create(p); }
 lv_obj_t *lv_btn_create(lv_obj_t *p) { return lv_obj_create(p); }
 void lv_obj_set_size(lv_obj_t *o, int w, int h) { (void)o;(void)w;(void)h; }

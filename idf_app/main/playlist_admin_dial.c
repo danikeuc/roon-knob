@@ -98,8 +98,11 @@ bool playlist_catalog_valid(const char *body,size_t len) {
  cJSON *cursor=get(j,"next_cursor");ok=ok&&(cJSON_IsNull(cursor)||text(cursor,t,129,128,false));cJSON_Delete(j);return ok;
 }
 bool playlist_capabilities_valid(const char *body,size_t len) {
- static const char *const names[]={"version","max_favorites","replace_queue"};cJSON *j=playlist_json_parse(body,len,1024);uint64_t v,m;
- bool ok=keys(j,names,3)&&number(get(j,"version"),&v)&&v==1&&number(get(j,"max_favorites"),&m)&&m==5&&cJSON_IsTrue(get(j,"replace_queue"));cJSON_Delete(j);return ok;
+ static const char *const names[]={"version","max_favorites","replace_queue","shared_playlists"};
+ cJSON *j=playlist_json_parse(body,len,1024);uint64_t v,m;
+ cJSON *shared=get(j,"shared_playlists");
+ bool ok=keys(j,names,shared?4:3)&&number(get(j,"version"),&v)&&v==1&&number(get(j,"max_favorites"),&m)&&m==5&&cJSON_IsTrue(get(j,"replace_queue"))&&(!shared||cJSON_IsBool(shared));
+ cJSON_Delete(j);return ok;
 }
 bool playlist_intent_parse(const char *body,size_t len,char *id,size_t cap,uint64_t *expires) {
  static const char *const names[]={"intent_id","expires_in_ms"};cJSON *j=playlist_json_parse(body,len,1024);

@@ -1,4 +1,5 @@
 #include "rk_ble_hid_host.h"
+#include <string.h>
 
 const char *rk_ble_hid_host_result_name(rk_ble_hid_host_result_t result) {
     switch (result) {
@@ -60,4 +61,28 @@ bool rk_ble_hid_host_map_consumer_report(const uint8_t *data, size_t len,
     default:
         return false;
     }
+}
+
+bool rk_ble_hid_host_map_device_report(const char *name, bool media_usage_supported,
+    uint8_t report_id, const uint8_t *data, size_t len,
+    rk_ble_media_key_t *held_key, rk_ble_media_key_t *key) {
+    if (key) *key = RK_BLE_MEDIA_KEY_NONE;
+    if (!name || strcmp(name, "QGSQ") != 0)
+        return rk_ble_hid_host_map_consumer_report(data, len, key);
+    if (!key || !held_key || !data || !media_usage_supported ||
+        report_id != 1 || len != 2 || data[1] != 0) return false;
+    rk_ble_media_key_t pressed;
+    switch (data[0]) {
+    case 0: *held_key = RK_BLE_MEDIA_KEY_NONE; return false;
+    case 0x01: pressed = RK_BLE_MEDIA_KEY_VOLUME_UP; break;
+    case 0x02: pressed = RK_BLE_MEDIA_KEY_VOLUME_DOWN; break;
+    case 0x04: pressed = RK_BLE_MEDIA_KEY_PLAY_PAUSE; break;
+    case 0x20: pressed = RK_BLE_MEDIA_KEY_NEXT_TRACK; break;
+    case 0x10: pressed = RK_BLE_MEDIA_KEY_PREVIOUS_TRACK; break;
+    default: return false;
+    }
+    if (*held_key == pressed) return false;
+    *held_key = pressed;
+    *key = pressed;
+    return true;
 }

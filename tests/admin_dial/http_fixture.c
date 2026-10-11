@@ -1,6 +1,8 @@
 /* Host-only HTTP transport and hardware/config dependencies. Production handlers
  * are compiled unchanged; counters expose forbidden pre-auth reads/writes. */
 #include "http_fixture.h"
+#include "bridge_client.h"
+#include "controller_input.h"
 #include "admin_auth_dial.h"
 #include "controller_config.h"
 #include "http_server_lifecycle.h"
@@ -18,8 +20,15 @@ httpd_uri_t routes[40];
 static int fixture_route_capacity=40;
 int route_count,fail_registration=-1,reads,writes,auth_queries,auth_mutations;
 int fixture_http_stack_size;
+rk_ble_hid_host_status_t fixture_ble_status;
 char fixture_logs[8192];
 bool configured,valid_session,storage_error;
+bool fixture_zones_online,fixture_zone_persist=true,fixture_zone_queue=true,fixture_zone_delay;
+char fixture_current_zone[64]="roon:sauna";
+int fixture_zone_changes;
+controller_interaction_context_t fixture_context;
+static void (*zone_job)(void*);
+static void *zone_job_arg;
 bool fixture_socket_ipv6;
 const char *fixture_socket_address;
 admin_result_t next_auth=ADMIN_OK;
@@ -36,10 +45,12 @@ void fixture_log(const char *format,...) {
 }
 void fixture_reset(void) {
     fixture_logs[0]=0;
+    fixture_context=CONTROLLER_INTERACTION_CONTEXT_SETTINGS_RECOVERY;fixture_zones_online=false;fixture_zone_persist=fixture_zone_queue=true;fixture_zone_delay=false;fixture_zone_changes=0;strcpy(fixture_current_zone,"roon:sauna");
     fixture_socket_ipv6=false;
     fixture_socket_address="192.168.4.1";
     fixture_route_capacity=40;
     fixture_http_stack_size=0;
+    memset(&fixture_ble_status,0,sizeof fixture_ble_status);
     route_count=reads=writes=auth_queries=auth_mutations=elapsed=0;
     fail_registration=-1;
     configured=true;
@@ -322,7 +333,7 @@ bool platform_mdns_resolve_local(const char*h,char*i,size_t n) {
     return false;
 }
 bool bridge_client_is_bridge_connected(void) {
-    return false;
+    return fixture_zones_online;
 }
 int bridge_client_get_bridge_retry_count(void) {
     return 0;
@@ -342,7 +353,7 @@ bool valve_config_clear(void) {
 }
 rk_ble_hid_host_result_t rk_ble_hid_host_status_copy(rk_ble_hid_host_status_t*out) {
     reads++;
-    memset(out,0,sizeof *out);
+    *out=fixture_ble_status;
     return 0;
 }
 size_t rk_ble_hid_host_scan_results_copy(rk_ble_hid_host_device_t*a,size_t b,uint32_t*c) {
@@ -436,3 +447,20 @@ bool valve_config_save_weather(const char *url,const char *display,const char *w
 bool valve_config_load(char *url,size_t ul,char *token,size_t tl) {
  (void)ul;(void)tl;strcpy(url,"http://192.0.2.10:8081");strcpy(token,"private-test-token");return true;
 }
+
+bool bridge_client_visit_zones(bridge_zone_list_visitor_t visitor,void *ctx) {
+ bridge_zone_t zones[]={{"roon:sauna","Sauna"},{"roon:living","Living <room>"},{"upnp:other","Other"}};
+ visitor(zones,3,fixture_current_zone,ctx);return true;
+}
+bool bridge_client_get_current_zone_id(char *out,size_t n){snprintf(out,n,"%s",fixture_current_zone);return true;}
+bridge_zone_selection_result_t bridge_client_select_zone_value(const char *id){
+ fixture_zone_changes++;if(fixture_zone_persist)snprintf(fixture_current_zone,sizeof fixture_current_zone,"%s",id);
+ return (bridge_zone_selection_result_t){.found=true,.persisted=fixture_zone_persist};
+}
+bool platform_task_post_to_ui(void (*fn)(void*),void *arg){if(!fixture_zone_queue)return false;if(fixture_zone_delay){zone_job=fn;zone_job_arg=arg;}else fn(arg);return true;}
+void fixture_run_zone_job(void){if(zone_job){void (*fn)(void*)=zone_job;zone_job=NULL;fn(zone_job_arg);}}
+void playlist_ui_cancel(void){}
+void ui_hide_zone_picker(void){}
+void platform_display_cancel_input(void){}
+bool controller_input_set_context(controller_interaction_context_t ctx){fixture_context=ctx;return true;}
+controller_interaction_context_t controller_input_get_context(void){return fixture_context;}

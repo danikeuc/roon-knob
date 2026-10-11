@@ -20,14 +20,14 @@ static int posts, gets, valve_indicator;
 static valve_action_t last_action;
 static uint16_t last_duration, selected_duration = 600;
 static bool selected_ready;
-static lv_obj_t objects[80];
+static lv_obj_t objects[160];
 static unsigned object_count;
 static lv_obj_t screen;
-struct fake_queue { unsigned capacity, count, head; size_t item_size; unsigned char data[4][256]; };
+struct fake_queue { unsigned capacity, count, head; size_t item_size; unsigned char data[4][512]; };
 static struct fake_queue queue;
 int64_t esp_timer_get_time(void) { return (int64_t)atomic_load(&fake_now) * 1000; }
 QueueHandle_t xQueueCreate(unsigned capacity, size_t item_size) {
-    assert(capacity == 4 && item_size <= 256);
+    assert(capacity == 4 && item_size <= 512);
     queue = (struct fake_queue){.capacity = capacity, .item_size = item_size};
     return &queue;
 }
@@ -49,7 +49,7 @@ int xQueueReceive(QueueHandle_t q, void *item, unsigned ticks) {
 void xQueueReset(QueueHandle_t q) { q->head = q->count = 0; }
 lv_obj_t *lv_screen_active(void) { return &screen; }
 lv_obj_t *lv_obj_create(lv_obj_t *p) {
-    assert(object_count < 80);
+    assert(object_count < 160);
     lv_obj_t *obj = &objects[object_count++];
     obj->parent = p;
     return obj;
@@ -455,5 +455,27 @@ int main(void) {
     assert(posts==before_weather+1); /* settings edit cancels the whole old contact */
     process();
     assert(!valve_indicator);
+    valve_status_t forecast_status={.state=VALVE_DRAIN,.forecast={.available=true,.codes_available=true,
+        .minima_c={1,-3.25f,3,4,5},.weather_codes={0,61,3,73,97}}};
+    valve_ui_set_status(&forecast_status);
+    assert(find_label("Tomorrow\nmin -3,2 °C"));
+    lv_obj_t *forecast_icon=NULL;
+    for(unsigned i=0;i<object_count;++i)if(objects[i].x==94&&objects[i].y==307)forecast_icon=&objects[i];
+    assert(forecast_icon && !(forecast_icon->flags&LV_OBJ_FLAG_HIDDEN));
+    int posts_before_forecast=posts;
+    forecast_status.forecast.codes_available=false;
+    valve_ui_set_status(&forecast_status);
+    assert(find_label("Tomorrow\nmin -3,2 °C") && (forecast_icon->flags&LV_OBJ_FLAG_HIDDEN));
+    forecast_status.forecast.available=false;forecast_status.forecast.stale=true;
+    valve_ui_set_status(&forecast_status);
+    assert(find_label("Forecast\nstale") && !find_label("Tomorrow\nmin -3,2 °C"));
+    forecast_status.forecast.available=true;forecast_status.forecast.codes_available=true;
+    valve_ui_set_status(&forecast_status);
+    fake_now+=11000;process();
+    assert(find_label("Forecast\nunavailable") && (forecast_icon->flags&LV_OBJ_FLAG_HIDDEN));
+    valve_ui_set_status(&forecast_status);
+    valve_ui_connected(false);process();
+    assert(find_label("Forecast\nunavailable") && !find_label("Tomorrow\nmin -3,2 °C"));
+    assert(posts==posts_before_forecast); /* Telemetry never emits control actions. */
     puts("valve UI sequence tests passed");
 }

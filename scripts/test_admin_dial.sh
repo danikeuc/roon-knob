@@ -40,6 +40,7 @@ cc -std=c11 -Wall -Wextra -Werror \
 python3 tests/admin_dial/test_boot_storage.py
 python3 tests/admin_dial/test_driver_rotation.py
 python3 tests/admin_dial/test_driver_input.py
+python3 tests/admin_dial/test_zone_swipe.py
 
 # Execute registered STA/AP/admin handlers against the host HTTP transport.
 sh scripts/test_admin_http.sh

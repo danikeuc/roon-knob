@@ -196,29 +196,43 @@ static bool observation_parse(const char *body,size_t length,char *out,size_t ca
      * named members; malformed optional data must not crash settings reads. */
     if(!cJSON_IsObject(weather)){cJSON_Delete(root);return false;}
     cJSON *operation=cJSON_GetObjectItemCaseSensitive(root,"operation");
-    const char *names[]={"enabled","available","eligible","reason","dates","minima_c","last_successful_check"};
+    const char *names[]={"enabled","available","eligible","reason","dates","minima_c","last_successful_check","weather_codes"};
     bool ok=cJSON_IsObject(weather)&&bounded_text(operation,32);
     for(cJSON *item=root?root->child:NULL;item;item=item->next)
         for(cJSON *next=item->next;next;next=next->next)if(!strcmp(item->string,next->string))ok=false;
     unsigned seen=0;
     for(cJSON *item=weather?weather->child:NULL;item;item=item->next){
         if(!item->string){ok=false;break;}
-        unsigned bit=0;for(unsigned i=0;i<7;i++)if(!strcmp(item->string,names[i]))bit=1u<<i;
+        unsigned bit=0;for(unsigned i=0;i<8;i++)if(!strcmp(item->string,names[i]))bit=1u<<i;
         if(!bit||(seen&bit))ok=false;
         seen|=bit;
     }
     cJSON *enabled=cJSON_GetObjectItemCaseSensitive(weather,"enabled"),*available=cJSON_GetObjectItemCaseSensitive(weather,"available"),*eligible=cJSON_GetObjectItemCaseSensitive(weather,"eligible");
     cJSON *reason=cJSON_GetObjectItemCaseSensitive(weather,"reason"),*dates=cJSON_GetObjectItemCaseSensitive(weather,"dates"),*minima=cJSON_GetObjectItemCaseSensitive(weather,"minima_c"),*last=cJSON_GetObjectItemCaseSensitive(weather,"last_successful_check");
     int days=cJSON_GetArraySize(dates);
-    ok=ok&&seen==127&&cJSON_IsBool(enabled)&&cJSON_IsBool(available)&&cJSON_IsBool(eligible)&&bounded_text(reason,96)&&cJSON_IsArray(dates)&&cJSON_IsArray(minima)&&(days==0||days==5)&&cJSON_GetArraySize(minima)==days&&(cJSON_IsNull(last)||bounded_text(last,40));
+    ok=ok&&(seen&127)==127&&cJSON_IsBool(enabled)&&cJSON_IsBool(available)&&cJSON_IsBool(eligible)&&bounded_text(reason,96)&&cJSON_IsArray(dates)&&cJSON_IsArray(minima)&&(days==0||days==5)&&cJSON_GetArraySize(minima)==days&&(cJSON_IsNull(last)||bounded_text(last,40));
     if(cJSON_IsTrue(eligible))ok=ok&&cJSON_IsTrue(available)&&days==5&&cJSON_IsString(last);
     for(int i=0;ok&&i<days;i++){
         cJSON *date=cJSON_GetArrayItem(dates,i),*minimum=cJSON_GetArrayItem(minima,i);
         ok=bounded_text(date,10)&&strlen(date->valuestring)==10&&cJSON_IsNumber(minimum)&&isfinite(minimum->valuedouble)&&minimum->valuedouble>=-100&&minimum->valuedouble<=100;
     }
+    cJSON *codes=cJSON_GetObjectItemCaseSensitive(weather,"weather_codes");
+    bool codes_valid=cJSON_IsArray(codes) && (cJSON_GetArraySize(codes)==0 ||
+        (days==5 && cJSON_GetArraySize(codes)==5));
+    for(int i=0;codes_valid && i<cJSON_GetArraySize(codes);++i) {
+        cJSON *code=cJSON_GetArrayItem(codes,i);
+        codes_valid=cJSON_IsNumber(code) && isfinite(code->valuedouble) && code->valuedouble>=0 &&
+            code->valuedouble<=99 && code->valuedouble==(double)(unsigned)code->valuedouble &&
+            valve_weather_code_valid((unsigned)code->valuedouble);
+    }
     if(ok){
         filtered=cJSON_CreateObject();ok=filtered&&cJSON_AddItemToObject(filtered,"operation",cJSON_Duplicate(operation,true));
         for(unsigned i=0;ok&&i<7;i++)ok=cJSON_AddItemToObject(filtered,names[i],cJSON_Duplicate(cJSON_GetObjectItemCaseSensitive(weather,names[i]),true));
+        if(ok)ok=status.temperature_available ?
+            cJSON_AddNumberToObject(filtered,"pipe_temperature_c",status.pipe_temperature_c)!=NULL :
+            cJSON_AddNullToObject(filtered,"pipe_temperature_c")!=NULL;
+        /* Unsupported optional icons never discard a confirmed weather observation. */
+        if(ok && codes_valid)ok=cJSON_AddItemToObject(filtered,"weather_codes",cJSON_Duplicate(codes,true));
         ok=ok&&cJSON_PrintPreallocated(filtered,out,(int)capacity,false);
     }
     cJSON_Delete(filtered);cJSON_Delete(root);return ok;
@@ -296,12 +310,115 @@ static void perform(const weather_settings_write_t *write,weather_settings_view_
 done:
     memset(token,0,sizeof token);memset(body,0,sizeof body);
 }
+
+static bool history_members(const cJSON *object,const char *const *names,unsigned count) {
+    if(!cJSON_IsObject(object))return false;
+    unsigned seen=0;
+    for(const cJSON *item=object->child;item;item=item->next) {
+        unsigned bit=0;
+        for(unsigned i=0;i<count;i++)if(item->string&&!strcmp(item->string,names[i]))bit=1u<<i;
+        if(!bit||(seen&bit))return false;
+        seen|=bit;
+    }
+    return seen==((1u<<count)-1u);
+}
+static bool history_text(const cJSON *item,size_t maximum) {
+    if(!bounded_text(item,maximum)||!item->valuestring[0])return false;
+    for(const unsigned char *p=(const unsigned char *)item->valuestring;*p;p++)if(*p<32||*p==127)return false;
+    return true;
+}
+static bool history_timestamp(const cJSON *item) {
+    if(!history_text(item,40))return false;
+    const char *p=item->valuestring;size_t n=strlen(p);
+    if(n<20||p[4]!='-'||p[7]!='-'||p[10]!='T'||p[13]!=':'||p[16]!=':')return false;
+    for(unsigned i=0;i<19;i++)if(i!=4&&i!=7&&i!=10&&i!=13&&i!=16&&(p[i]<'0'||p[i]>'9'))return false;
+    unsigned year=(unsigned)atoi(p),month=(unsigned)atoi(p+5),day=(unsigned)atoi(p+8);
+    static const unsigned days[]={31,28,31,30,31,30,31,31,30,31,30,31};
+    if(!year||month<1||month>12||!day)return false;
+    unsigned maxday=days[month-1]+(month==2&&year%4==0&&(year%100!=0||year%400==0));
+    if(day>maxday||atoi(p+11)>23||atoi(p+14)>59||atoi(p+17)>59)return false;
+    size_t end=19;
+    if(p[end]=='.') {size_t start=++end;while(p[end]>='0'&&p[end]<='9')end++;if(end==start)return false;}
+    return !strcmp(p+end,"Z")||!strcmp(p+end,"+00:00");
+}
+static char *history_parse(const char *body,size_t length,uint32_t offset) {
+    if(!body||!length||length>=WEATHER_BODY_MAX||memchr(body,0,length)||!valve_json_object_valid(body,length))return NULL;
+    /* Bound shape/depth before the allocating parser; no arbitrary upstream JSON. */
+    jsmntok_t tokens[128];jsmn_parser parser;jsmn_init(&parser);
+    int count=jsmn_parse(&parser,body,length,tokens,128),ends[3],depth=0;
+    if(count<1)return NULL;
+    for(int i=0;i<count;i++) {
+        while(depth&&tokens[i].start>=ends[depth-1])depth--;
+        if(tokens[i].type==JSMN_OBJECT||tokens[i].type==JSMN_ARRAY) {
+            if(depth==3)return NULL;
+            ends[depth++]=tokens[i].end;
+        }
+    }
+    bool integer_offset=false;
+    for(int i=1;i+1<count;i++)if(tokens[i].type==JSMN_STRING&&tokens[i].end-tokens[i].start==6&&!memcmp(body+tokens[i].start,"offset",6)) {
+        if(tokens[i+1].type!=JSMN_PRIMITIVE)return NULL;
+        for(int n=tokens[i+1].start;n<tokens[i+1].end;n++)if(body[n]<'0'||body[n]>'9')return NULL;
+        integer_offset=true;
+    }
+    if(!integer_offset)return NULL;
+    for(size_t i=0;i+5<length;i++)if(!memcmp(body+i,"\\u0000",6))return NULL;
+    cJSON *root=cJSON_ParseWithLengthOpts(body,length,NULL,false),*filtered=NULL;
+    const char *const top[]={"items","offset","has_more"};
+    const char *const fields[]={"occurred_at","mode","operation","command","reason"};
+    cJSON *items=cJSON_GetObjectItemCaseSensitive(root,"items"),*position=cJSON_GetObjectItemCaseSensitive(root,"offset"),*more=cJSON_GetObjectItemCaseSensitive(root,"has_more");
+    bool ok=history_members(root,top,3)&&cJSON_IsArray(items)&&cJSON_GetArraySize(items)<=10&&
+        cJSON_IsNumber(position)&&position->valuedouble==(double)offset&&cJSON_IsBool(more);
+    for(int i=0;ok&&i<cJSON_GetArraySize(items);i++) {
+        cJSON *item=cJSON_GetArrayItem(items,i),*command=cJSON_GetObjectItemCaseSensitive(item,"command");
+        ok=history_members(item,fields,5)&&history_timestamp(cJSON_GetObjectItemCaseSensitive(item,"occurred_at"))&&
+            history_text(cJSON_GetObjectItemCaseSensitive(item,"mode"),32)&&history_text(cJSON_GetObjectItemCaseSensitive(item,"operation"),32)&&
+            history_text(command,6)&&(!strcmp(command->valuestring,"DRAIN")||!strcmp(command->valuestring,"SUPPLY"))&&
+            history_text(cJSON_GetObjectItemCaseSensitive(item,"reason"),96);
+    }
+    char *result=NULL;
+    if(ok) {
+        filtered=cJSON_CreateObject();cJSON *rows=cJSON_AddArrayToObject(filtered,"items");
+        ok=filtered&&rows&&cJSON_AddNumberToObject(filtered,"offset",offset)&&cJSON_AddBoolToObject(filtered,"has_more",cJSON_IsTrue(more));
+        for(int i=0;ok&&i<cJSON_GetArraySize(items);i++) {
+            cJSON *row=cJSON_CreateObject();ok=row&&cJSON_AddItemToArray(rows,row);
+            for(unsigned f=0;ok&&f<5;f++)ok=cJSON_AddStringToObject(row,fields[f],cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(items,i),fields[f])->valuestring)!=NULL;
+        }
+        if(ok){result=malloc(WEATHER_BODY_MAX);if(result&&!cJSON_PrintPreallocated(filtered,result,WEATHER_BODY_MAX,false)){free(result);result=NULL;}}
+    }
+    cJSON_Delete(filtered);cJSON_Delete(root);return result;
+}
+static char *perform_history(uint32_t offset,const settings_deadline_t *deadline) {
+    unsigned generation=valve_config_generation(),session=valve_client_current_session();
+    char base[VALVE_CONFIG_URL_LEN]={0},token[VALVE_CONFIG_TOKEN_LEN]={0},url[VALVE_CONFIG_URL_LEN+80];
+    char *response=NULL,*result=NULL;size_t length=0;int status=0;
+    if(offset>SHOWER_HISTORY_OFFSET_MAX||settings_expired(deadline)||(generation&1u)||
+        !valve_config_weather_load(base,sizeof base,token,sizeof token)||generation!=valve_config_generation())goto done;
+#ifdef WEATHER_ADMIN_HOST_TEST
+    if(!transport)goto done;
+#endif
+    response=malloc(WEATHER_BODY_MAX);if(!response)goto done;
+    snprintf(url,sizeof url,"%s/api/v1/display/history?offset=%lu",base,(unsigned long)offset);
+    int rc=transport("GET",url,"X-Weather-Settings-Token",token,NULL,0,&status,response,WEATHER_BODY_MAX,&length,
+#ifdef WEATHER_ADMIN_HOST_TEST
+        transport_context
+#else
+        (void *)deadline
+#endif
+    );
+    if(rc||status!=200||length>=WEATHER_BODY_MAX||settings_expired(deadline)||generation!=valve_config_generation()||session!=valve_client_current_session())goto done;
+    result=history_parse(response,length,offset);
+    if(settings_expired(deadline)||generation!=valve_config_generation()||session!=valve_client_current_session()){free(result);result=NULL;}
+done:
+    memset(token,0,sizeof token);free(response);return result;
+}
 #ifndef WEATHER_ADMIN_HOST_TEST
 /* Caller and worker own separate references. A stalled DNS/socket operation can
  * outlive the finite HTTP wait without retaining stack pointers or server state. */
 static QueueHandle_t jobs;
 typedef struct {
-    bool write;
+    bool write,history;
+    uint32_t history_offset;
+    char *history_json;
     weather_settings_write_t request;
     weather_settings_view_t result;
     settings_snapshot_t confirmed;
@@ -312,13 +429,14 @@ typedef struct {
 } job_t;
 static void job_release(job_t *job) {
     if(atomic_fetch_sub(&job->references,1)==1) {
-        vSemaphoreDelete(job->done);free(job);
+        vSemaphoreDelete(job->done);free(job->history_json);free(job);
     }
 }
 static void worker(void *context) {
     (void)context;job_t *job;
     for(;;)if(xQueueReceive(jobs,&job,portMAX_DELAY)==pdTRUE) {
-        perform(job->write?&job->request:NULL,&job->result,&job->deadline,&job->confirmed);
+        if(job->history)job->history_json=perform_history(job->history_offset,&job->deadline);
+        else perform(job->write?&job->request:NULL,&job->result,&job->deadline,&job->confirmed);
         if(settings_expired(&job->deadline)) {
             memset(&job->result,0,sizeof job->result);job->result.result=WEATHER_ADMIN_TIMEOUT;
         }
@@ -376,4 +494,29 @@ static bool execute(const weather_settings_write_t *write,weather_settings_view_
 bool weather_admin_get(weather_settings_view_t *out) { return execute(NULL,out); }
 bool weather_admin_update(const weather_settings_write_t *request,weather_settings_view_t *out) {
     return request && execute(request,out);
+}
+
+/* Shares the single weather worker/admission slot; no history task or orphan
+ * queue is added. Result storage is heap owned, never HTTP/worker stack backed. */
+bool shower_history_get(uint32_t offset,char **json) {
+    if(!json)return false;
+    *json=NULL;
+    if(offset>SHOWER_HISTORY_OFFSET_MAX||atomic_flag_test_and_set(&admission))return false;
+#ifdef WEATHER_ADMIN_HOST_TEST
+    *json=perform_history(offset,NULL);atomic_flag_clear(&admission);
+#else
+    uint64_t origin=settings_now_ms();
+    job_t *job=jobs&&origin<=UINT64_MAX-WEATHER_REQUEST_MS?calloc(1,sizeof *job):NULL;
+    if(!job){atomic_flag_clear(&admission);return false;}
+    job->history=true;job->history_offset=offset;job->done=xSemaphoreCreateBinary();
+    atomic_init(&job->references,2);atomic_init(&job->cancelled,false);atomic_init(&job->confirmed.ready,false);
+    job->deadline=(settings_deadline_t){.origin_ms=origin,.expires_ms=origin+WEATHER_REQUEST_MS,.cancelled=&job->cancelled};
+    if(!job->done||xQueueSend(jobs,&job,0)!=pdTRUE){if(job->done)vSemaphoreDelete(job->done);free(job);atomic_flag_clear(&admission);return false;}
+    uint64_t now=settings_now_ms(),remaining=now>=origin&&now<job->deadline.expires_ms?job->deadline.expires_ms-now:0;
+    if(remaining&&xSemaphoreTake(job->done,pdMS_TO_TICKS(remaining))==pdTRUE&&!settings_expired(&job->deadline)) {
+        *json=job->history_json;job->history_json=NULL;
+    }else atomic_store(&job->cancelled,true);
+    job_release(job);
+#endif
+    return *json!=NULL;
 }

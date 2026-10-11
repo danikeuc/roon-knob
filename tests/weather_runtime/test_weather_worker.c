@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 static admin_result_t local_settings(admin_http_settings_t *out) {
     *out=(admin_http_settings_t){.duration_minutes=10,.rotation_degrees=0,.generation=1};return ADMIN_OK;
 }
@@ -41,5 +42,23 @@ int main(void) {
     request=fixture_request("/admin/api/weather",HTTP_GET,NULL);request.cookie=cookie;fixture_call(&request);
     assert(fixture_status(&request)==200&&strstr(request.response,"\"observation\":null")&&strstr(request.response,"\"revision\":1"));
     runtime_wait_counts(2,1);assert(atomic_load(&fixture_body_writes)==0);
-    puts("production weather worker/HTTP bounded wait, late result, no PUT retry: PASS");
+
+    runtime_http_case(HTTP_WEATHER_NORMAL);
+    char *history=NULL;unsigned epoch=weather_admin_generation();
+    assert(shower_history_get(0,&history)&&history&&strstr(history,"\"items\":[]"));free(history);
+    runtime_wait_cleanup(1);assert(atomic_load(&fixture_body_writes)==0);
+    runtime_http_case(HTTP_WEATHER_STALLED_OPEN);
+    began=runtime_wall_ms();request=fixture_request("/admin/api/shower-history",HTTP_GET,NULL);request.cookie=cookie;fixture_call(&request);
+    assert(fixture_status(&request)==503&&runtime_wall_ms()-began<150&&!strstr(request.response,"items"));
+    assert(!shower_history_get(0,&history)&&!history&&!weather_admin_get(&view));
+    local=fixture_request("/admin/api/settings",HTTP_GET,NULL);local.cookie=cookie;fixture_call(&local);assert(fixture_status(&local)==200);
+    runtime_wait_cleanup(1);assert(atomic_load(&fixture_body_writes)==0);
+    runtime_http_case(HTTP_WEATHER_SLOW_RESPONSE);
+    began=runtime_wall_ms();assert(!shower_history_get(0,&history)&&!history&&runtime_wall_ms()-began<150);
+    runtime_wait_cleanup(1);assert(atomic_load(&fixture_body_writes)==0);
+    runtime_http_case(HTTP_WEATHER_NORMAL);
+    request=fixture_request("/admin/api/shower-history?offset=0",HTTP_GET,NULL);request.cookie=cookie;fixture_call(&request);
+    assert(fixture_status(&request)==200&&strstr(request.response,"\"items\":[]"));
+    runtime_wait_cleanup(1);assert(atomic_load(&fixture_body_writes)==0&&weather_admin_generation()==epoch);
+    puts("production weather/history worker/HTTP bounded wait, late result, no PUT retry: PASS");
 }

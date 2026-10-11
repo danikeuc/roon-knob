@@ -24,7 +24,9 @@
 typedef struct { valve_client_event_t event; uint64_t received_at_ms; } completion_t;
 static QueueHandle_t s_completions;
 static lv_obj_t *s_overlay, *s_state, *s_countdown, *s_action, *s_action_label;
-static lv_obj_t *s_temperature;
+static lv_obj_t *s_temperature, *s_forecast_label, *s_forecast_icon;
+static lv_obj_t *s_weather_sun, *s_weather_cloud, *s_weather_rain, *s_weather_snow;
+static lv_obj_t *s_weather_fog, *s_weather_bolt, *s_weather_sleet, *s_weather_drizzle;
 static lv_obj_t *s_rain, *s_snow, *s_relay_left, *s_relay_right;
 static valve_status_t s_status;
 static valve_hold_t s_hold;
@@ -182,9 +184,90 @@ static void create_shower_symbol(void) {
     lv_obj_set_style_border_color(s_relay_right, lv_color_hex(ICON_COLOR), 0);
 }
 
+/* Small vector equivalents of the approved weather-icons-v1 assets. Static
+ * points remain alive for LVGL; no raster allocation or network asset loading. */
+static void weather_line(lv_obj_t *parent, const lv_point_precise_t *points,
+                         unsigned count, uint32_t color) {
+    lv_obj_t *line=lv_line_create(parent);
+    lv_line_set_points(line,points,count);
+    lv_obj_set_style_line_color(line,lv_color_hex(color),0);
+    lv_obj_set_style_line_width(line,2,0);
+    lv_obj_set_style_line_rounded(line,true,0);
+}
+static void create_forecast(void) {
+    s_forecast_icon=make_container(s_overlay,94,307,34,34);
+    s_weather_sun=make_container(s_forecast_icon,0,0,34,34);
+    lv_obj_t *disc=make_solid(s_weather_sun,11,9,12,12,SCREEN_COLOR,6);
+    lv_obj_set_style_border_width(disc,2,0);
+    lv_obj_set_style_border_color(disc,lv_color_hex(0xF2BF69),0);
+    static const lv_point_precise_t rays[][2]={
+        {{17,2},{17,5}},{{17,25},{17,28}},{{4,15},{7,15}},{{27,15},{30,15}},
+        {{7,5},{9,7}},{{25,23},{27,25}},{{7,25},{9,23}},{{25,7},{27,5}}};
+    for(unsigned i=0;i<8;++i)weather_line(s_weather_sun,rays[i],2,0xF2BF69);
+    s_weather_cloud=make_container(s_forecast_icon,0,0,34,34);
+    static const lv_point_precise_t cloud[]={
+        {8,22},{5,21},{3,18},{3,15},{5,12},{9,11},{10,7},{13,4},
+        {17,3},{21,4},{24,7},{25,11},{28,11},{31,13},{32,16},{31,19},
+        {29,21},{26,22},{8,22}};
+    weather_line(s_weather_cloud,cloud,sizeof cloud/sizeof cloud[0],ICON_COLOR);
+    s_weather_rain=make_container(s_forecast_icon,0,0,34,34);
+    static const lv_point_precise_t rain[][2]={{{10,26},{8,31}},{{18,26},{16,31}},{{26,26},{24,31}}};
+    for(unsigned i=0;i<3;++i)weather_line(s_weather_rain,rain[i],2,0x74D9CD);
+    s_weather_snow=make_container(s_forecast_icon,0,0,34,34);
+    static const lv_point_precise_t snow[][2]={
+        {{7,29},{15,29}},{{9,26},{13,32}},{{9,32},{13,26}},
+        {{21,29},{29,29}},{{23,26},{27,32}},{{23,32},{27,26}}};
+    for(unsigned i=0;i<6;++i)weather_line(s_weather_snow,snow[i],2,0x9BD9EC);
+    s_weather_sleet=make_container(s_forecast_icon,0,0,34,34);
+    weather_line(s_weather_sleet,rain[0],2,0x74D9CD);
+    for(unsigned i=3;i<6;++i)weather_line(s_weather_sleet,snow[i],2,0x9BD9EC);
+    s_weather_drizzle=make_container(s_forecast_icon,0,0,34,34);
+    for(unsigned i=0;i<3;++i)make_solid(s_weather_drizzle,8+(int)i*8,27,3,3,0x74D9CD,2);
+    s_weather_fog=make_container(s_forecast_icon,0,0,34,34);
+    static const lv_point_precise_t fog[][2]={{{5,26},{28,26}},{{9,31},{24,31}}};
+    for(unsigned i=0;i<2;++i)weather_line(s_weather_fog,fog[i],2,0x8CABB9);
+    s_weather_bolt=make_container(s_forecast_icon,0,0,34,34);
+    static const lv_point_precise_t bolt[]={{19,21},{14,27},{20,27},{15,33}};
+    weather_line(s_weather_bolt,bolt,4,0xF2BF69);
+    s_forecast_label=lv_label_create(s_overlay);
+    lv_obj_set_pos(s_forecast_label,139,306);
+    lv_obj_set_style_text_font(s_forecast_label,&lv_font_montserrat_14,0);
+    lv_obj_set_style_text_color(s_forecast_label,lv_color_hex(ICON_COLOR),0);
+}
+static void weather_visible(lv_obj_t *obj,bool visible) {
+    if(visible)lv_obj_clear_flag(obj,LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(obj,LV_OBJ_FLAG_HIDDEN);
+}
+static void render_forecast(bool current) {
+    const valve_forecast_t *forecast=&s_status.forecast;
+    bool available=current && forecast->available;
+    weather_visible(s_forecast_icon,available && forecast->codes_available);
+    if(!available) {
+        lv_label_set_text(s_forecast_label,current && forecast->stale ? "Forecast\nstale" : "Forecast\nunavailable");
+        return;
+    }
+    valve_status_t minimum={.temperature_available=true,.pipe_temperature_c=forecast->minima_c[1]};
+    char temperature[24],label[48];
+    valve_temperature_format(&minimum,temperature,sizeof temperature);
+    snprintf(label,sizeof label,"Tomorrow\nmin %s",temperature);
+    lv_label_set_text(s_forecast_label,label);
+    if(!forecast->codes_available)return;
+    unsigned code=forecast->weather_codes[1];
+    bool freezing=code==56||code==57||code==66||code==67;
+    bool snow=(code>=71&&code<=77)||code==85||code==86;
+    weather_visible(s_weather_sun,code<=2);
+    weather_visible(s_weather_cloud,code!=0);
+    weather_visible(s_weather_fog,code==45||code==48);
+    weather_visible(s_weather_rain,(!freezing&&code>=61&&code<=65)||(code>=80&&code<=82));
+    weather_visible(s_weather_snow,snow);
+    weather_visible(s_weather_drizzle,code==51||code==53||code==55);
+    weather_visible(s_weather_sleet,freezing);
+    weather_visible(s_weather_bolt,code>=95);
+}
 static void render(uint32_t now_ms) {
     if (!s_overlay) return;
     bool current = fresh(now_ms);
+    render_forecast(current);
     lv_obj_align(s_countdown, LV_ALIGN_TOP_MID, 0, 40);
     char temperature_text[32];
     valve_temperature_format(current ? &s_status : NULL, temperature_text,
@@ -212,7 +295,7 @@ static void render(uint32_t now_ms) {
                 /* Keep the saved duration visible; explain the disabled action
                  * below it without covering the temperature/status row. */
                 lv_label_set_text(s_countdown, "Pi: 10 min only");
-                lv_obj_align(s_countdown, LV_ALIGN_TOP_MID, 0, 304);
+                lv_obj_align(s_countdown, LV_ALIGN_TOP_MID, 0, 213);
             }
         } else snprintf(label, sizeof label, "LOADING");
         lv_label_set_text(s_action_label, label);
@@ -309,6 +392,7 @@ void valve_ui_init(void) {
     lv_obj_set_pos(s_temperature, 90, 31);
     lv_obj_set_style_text_font(s_temperature, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(s_temperature, lv_color_hex(ICON_COLOR), 0);
+    create_forecast();
     render(0);
     (void)valve_client_start(completion_cb, NULL);
 }

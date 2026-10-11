@@ -99,7 +99,7 @@ static bool budget(esp_http_client_handle_t client,const playlist_http_request_t
 static int http(const playlist_http_request_t *r,int *status,char *out,size_t capacity,size_t *length){
  esp_http_client_config_t cfg={.url=r->url,.timeout_ms=3000,.disable_auto_redirect=true,.method=!strcmp(r->method,"POST")?HTTP_METHOD_POST:!strcmp(r->method,"PUT")?HTTP_METHOD_PUT:HTTP_METHOD_GET};
  esp_http_client_handle_t c=esp_http_client_init(&cfg);if(!c)return -1;char bearer[136];snprintf(bearer,sizeof bearer,"Bearer %s",r->token);int rc=-3;size_t n=r->body?strlen(r->body):0;
- if(esp_http_client_set_header(c,"Authorization",bearer)!=ESP_OK||esp_http_client_set_header(c,"Accept","application/json")!=ESP_OK||(n&&esp_http_client_set_header(c,"Content-Type","application/json")!=ESP_OK))goto done;
+ if(esp_http_client_set_header(c,"Authorization",bearer)!=ESP_OK||esp_http_client_set_header(c,"Accept","application/json")!=ESP_OK||esp_http_client_set_header(c,"X-Dial-Zone",r->zone)!=ESP_OK||(n&&esp_http_client_set_header(c,"Content-Type","application/json")!=ESP_OK))goto done;
  if(!budget(c,r)||esp_http_client_open(c,(int)n)!=ESP_OK)goto done;
  /* DNS/open can outlive its timeout. Revalidate immediately before body bytes. */
  if(!budget(c,r))goto done;
@@ -115,7 +115,7 @@ done:memset(bearer,0,sizeof bearer);esp_http_client_close(c);esp_http_client_cle
 static int exchange(job_t *job,const char *method,const char *path,const char *body,char *out,size_t cap,size_t *length) {
  if(!valid(job))return -3;
  char url[400];int n=snprintf(url,sizeof url,"%s%s%s",job->endpoint.base,(strlen(job->endpoint.base)>=5&&!strcmp(job->endpoint.base+strlen(job->endpoint.base)-5,"/roon"))?"":"/roon",path);if(n<0||(size_t)n>=sizeof url)return -1;
- playlist_http_request_t request={.method=method,.path=path,.body=body,.url=url,.token=job->endpoint.token,.deadline_ms=job->deadline,.valid=valid,.context=job};int status=0;
+ playlist_http_request_t request={.method=method,.path=path,.body=body,.url=url,.token=job->endpoint.token,.zone=job->endpoint.zone,.deadline_ms=job->deadline,.valid=valid,.context=job};int status=0;
 #ifdef PLAYLIST_HOST_TEST
  int rc=transport_hook?transport_hook(&request,&status,out,cap,length):-1;
 #else
@@ -161,7 +161,7 @@ static void perform(job_t *j) {
   if(j->generation!=atomic_load(&ui_generation))return;
   int status;if(rc==200&&playlist_receipt_parse(response,len,j->request_id,j->endpoint.zone,&status))publish(j,(playlist_client_status_t)status,NULL);
   else if(rc==409||rc==401||rc==422||rc==413)publish(j,PLAYLIST_CLIENT_ERROR,NULL);
-  else publish(j,PLAYLIST_CLIENT_ACCEPTED,NULL);
+  else publish(j,PLAYLIST_CLIENT_WAITING,NULL);
   return;
  }
 error:if(j->kind!=JOB_ADMIN)publish(j,PLAYLIST_CLIENT_ERROR,NULL);
@@ -222,7 +222,7 @@ bool playlist_client_take(playlist_client_result_t *out){
  if(message.result.generation!=atomic_load(&ui_generation))return false;
  *out=message.result;
  if(out->status==PLAYLIST_CLIENT_FAVORITES){picker_proof.valid=true;picker_proof.generation=out->generation;picker_proof.endpoint=message.binding;picker_proof.favorites=out->favorites;}
- if(out->status==PLAYLIST_CLIENT_ACCEPTED){if(!pending.active){pending.start=now_ms();pending.poll=pending.start;pending.generation=out->generation;strcpy(pending.id,out->request_id);strcpy(pending.zone,out->zone);}pending.active=true;}else pending.active=false;
+ if(out->status==PLAYLIST_CLIENT_ACCEPTED||out->status==PLAYLIST_CLIENT_WAITING){if(!pending.active){pending.start=now_ms();pending.poll=pending.start;pending.generation=out->generation;strcpy(pending.id,out->request_id);strcpy(pending.zone,out->zone);}pending.active=true;}else pending.active=false;
  return true;
 }
 void playlist_client_process(void){

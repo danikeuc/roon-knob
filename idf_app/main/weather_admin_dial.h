@@ -4,6 +4,9 @@
 #include <stdint.h>
 #define WEATHER_TIMEZONE_LEN 65
 #define WEATHER_BODY_MAX 4096
+#define SHOWER_HISTORY_OFFSET_MAX 1000000u
+/* Caller owns the filtered JSON on success; never includes private credentials. */
+bool shower_history_get(uint32_t offset, char **json);
 #define WEATHER_REVISION_MAX UINT64_C(9007199254740991)
 typedef enum { WEATHER_ADMIN_OK, WEATHER_ADMIN_INVALID, WEATHER_ADMIN_CONFLICT,
                WEATHER_ADMIN_TIMEOUT, WEATHER_ADMIN_UNAVAILABLE, WEATHER_ADMIN_UNAUTHORIZED } weather_admin_result_t;

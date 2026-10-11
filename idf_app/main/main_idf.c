@@ -40,7 +40,7 @@ static const char *TAG = "main";
 // 16 KiB fits after the Dial's LVGL DMA buffers while retaining measured margin.
 #define UI_LOOP_STACK_SIZE (16 * 1024)
 #define UI_LOOP_CORE 1
-#define LVGL_PSRAM_POOL_SIZE (72 * 1024)
+#define LVGL_PSRAM_POOL_SIZE (CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES * 1024)
 
 // UI task handle for display sleep management
 static TaskHandle_t g_ui_task_handle = NULL;

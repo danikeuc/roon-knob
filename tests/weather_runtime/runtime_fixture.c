@@ -35,12 +35,14 @@ void runtime_wait_counts(unsigned exchanges,unsigned jobs) {
     assert(atomic_load(&fixture_cleanups)>=exchanges && atomic_load(&released_jobs)>=jobs);
 }
 void runtime_wait_cleanup(unsigned count){runtime_wait_counts(count,count);}
-struct fake_http { esp_http_client_method_t method;int timeout;char response[2048];size_t offset;bool weather; };
+struct fake_http { esp_http_client_method_t method;int timeout;char response[2048];size_t offset;bool weather,history; };
 esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *config) {
     struct fake_http *client=calloc(1,sizeof *client);assert(client);
     client->method=config->method;client->timeout=config->timeout_ms;
     client->weather=strstr(config->url,"weather-settings")!=NULL;
-    if(client->weather)strcpy(client->response,"{\"revision\":1,\"enabled\":true,\"latitude\":46.05,\"longitude\":14.5,\"timezone\":\"Europe/Ljubljana\"}");
+    client->history=strstr(config->url,"/display/history?offset=")!=NULL;
+    if(client->history){assert(client->method==HTTP_METHOD_GET);strcpy(client->response,"{\"items\":[],\"offset\":0,\"has_more\":false}");}
+    else if(client->weather)strcpy(client->response,"{\"revision\":1,\"enabled\":true,\"latitude\":46.05,\"longitude\":14.5,\"timezone\":\"Europe/Ljubljana\"}");
     else {
         strcpy(client->response,weather_fixture_0);
         if(scenario==HTTP_OBSERVATION_MALFORMED){
@@ -52,7 +54,7 @@ esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *co
 }
 esp_err_t esp_http_client_set_header(esp_http_client_handle_t client,const char *name,const char *value) {
     if(!strcmp(name,"X-Display-Token"))assert(!client->weather && !strcmp(value,"private-test-token"));
-    if(!strcmp(name,"X-Weather-Settings-Token"))assert(client->weather && !strcmp(value,"private-weather-http"));
+    if(!strcmp(name,"X-Weather-Settings-Token"))assert((client->weather||client->history) && !strcmp(value,"private-weather-http"));
     return ESP_OK;
 }
 esp_err_t esp_http_client_set_timeout_ms(esp_http_client_handle_t client,int value) {

@@ -19,6 +19,8 @@ preamble=r"""
 #define pdPASS 1
 #define portMAX_DELAY UINT32_MAX
 #define LV_OBJ_FLAG_HIDDEN 1
+#define ESP_LOGI(...) ((void)0)
+static unsigned uxTaskGetStackHighWaterMark(void *task){(void)task;return 4096;}
 static jmp_buf worker_stop;
 struct fake_queue {unsigned count;size_t size;char data[2048];};
 typedef struct fake_queue *QueueHandle_t;
@@ -27,7 +29,7 @@ static QueueHandle_t xQueueCreate(unsigned capacity,size_t size){assert(capacity
 static int xQueueOverwrite(QueueHandle_t q,const void *value){memcpy(q->data,value,q->size);q->count=1;return pdTRUE;}
 static int xQueueReceive(QueueHandle_t q,void *value,unsigned wait){if(!q->count){if(wait==portMAX_DELAY)longjmp(worker_stop,1);return 0;}assert(wait==0||wait==portMAX_DELAY);memcpy(value,q->data,q->size);q->count=0;return pdTRUE;}
 static void vQueueDelete(QueueHandle_t q){free(q);}
-static int xTaskCreate(void (*fn)(void *),const char *name,unsigned stack,void *ctx,unsigned priority,void *handle){(void)fn;(void)name;(void)ctx;(void)handle;assert(stack==4096&&priority==2);return pdPASS;}
+static int xTaskCreate(void (*fn)(void *),const char *name,unsigned stack,void *ctx,unsigned priority,void *handle){(void)fn;(void)name;(void)ctx;(void)handle;assert(stack>=8192&&stack<=16384&&priority==2);return pdPASS;}
 static uint32_t endpoint_generation=1;
 static uint64_t milliseconds;
 static unsigned fetches,applied;

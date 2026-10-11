@@ -8,6 +8,7 @@
 #include "admin_settings_dial.h"
 #include "ui.h"
 #include "bridge_client.h"
+#include "controller_input.h"
 #include "battery.h"
 #include "i2c_bsp.h"
 #include "lcd_touch_bsp.h"
@@ -42,10 +43,11 @@ static bool s_touch_consumed = false;
 static bool s_touch_started_on_playlist;
 static bool s_touch_started_on_valve = false;
 static bool s_touch_wake = false;
+static bool s_touch_started_in_art;
 static int16_t s_touch_last_x, s_touch_last_y;
 static volatile bool s_pending_page_switch = false;
 static volatile bool s_pending_art_mode = false;   // Deferred art mode activation
-static volatile bool s_pending_exit_art_mode = false;  // Deferred art mode exit
+static volatile bool s_pending_zone_picker = false;  // Deferred zone picker opening
 static bool s_local_rotation_override;
 static bool s_touch_until_release;
 static uint16_t s_current_rotation = 0;  // Track rotation for swipe direction transform
@@ -65,10 +67,10 @@ static esp_timer_handle_t s_lvgl_tick_timer = NULL;
 #define LCD_HOST SPI2_HOST
 #define LCD_H_RES 360
 #define LCD_V_RES 360
-/* Two 36-row DMA buffers consumed 51,840 bytes and left Wi-Fi with no
- * DMA-capable heap once BLE was connected. Twenty-four rows retains partial,
- * double-buffered rendering while returning 17,280 bytes to the radio path. */
-#define LVGL_BUF_HEIGHT 24
+/* Two 12-row RGB565 DMA buffers use 17,280 bytes. LVGL renders partial
+ * strips; smaller buffers retain internal memory for the BLE controller.
+ * lv_color_t is RGB888 in LVGL 9, so it is not the panel's pixel size. */
+#define LVGL_BUF_HEIGHT 12
 #define PIN_NUM_LCD_CS      ((gpio_num_t)14)
 #define PIN_NUM_LCD_PCLK    ((gpio_num_t)13)
 #define PIN_NUM_LCD_DATA0   ((gpio_num_t)15)
@@ -356,6 +358,7 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
             s_touch_consumed = false;
             s_touch_started_on_valve = valve_ui_visible();
             s_touch_started_on_playlist = playlist_ui_visible();
+            s_touch_started_in_art = state == DISPLAY_STATE_ART_MODE;
             s_touch_wake = state != DISPLAY_STATE_NORMAL || display_is_touch_suppressed();
             if (state != DISPLAY_STATE_NORMAL) valve_ui_wake();
         }
@@ -418,11 +421,21 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
     valve_gesture_context_t context = {
         .zone_picker = ui_is_zone_picker_visible(),
         .settings = ui_is_settings_visible(),
-        .art_mode = display_get_state() == DISPLAY_STATE_ART_MODE,
-        .wake_touch = s_touch_wake,
+        .art_mode = s_touch_started_in_art || display_get_state() == DISPLAY_STATE_ART_MODE,
+        .wake_touch = s_touch_wake && !s_touch_started_in_art,
     };
     valve_gesture_t gesture = valve_gesture_classify(dx, dy, elapsed,
                                                       0, context);
+    /* A downward swipe owns this release, including when a playlist modal
+     * consumed the press. Defer opening until outside the LVGL read callback. */
+    if (!s_touch_started_on_valve && gesture == VALVE_GESTURE_ART_DOWN &&
+        (!s_touch_wake || s_touch_started_in_art)) {
+        playlist_ui_cancel();
+        s_touch_consumed = true;
+        s_pending_zone_picker = true;
+        s_last_tap_time = 0;
+        lv_indev_reset(indev, NULL);
+    }
     if (gesture == VALVE_GESTURE_SWITCH_SCREEN && !s_touch_consumed) {
         s_touch_consumed = true;
         s_pending_page_switch = true;
@@ -437,8 +450,6 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
     } else if (!s_touch_consumed && !s_touch_wake) {
         if (gesture == VALVE_GESTURE_ART_UP && bridge_client_is_ready_for_art_mode())
             s_pending_art_mode = true;
-        else if (gesture == VALVE_GESTURE_ART_DOWN)
-            s_pending_exit_art_mode = true;
         else if (abs(dx) < DOUBLE_TAP_MAX_DISTANCE && abs(dy) < DOUBLE_TAP_MAX_DISTANCE &&
                  display_get_state() != DISPLAY_STATE_ART_MODE) {
             int64_t interval = now_ms - s_last_tap_time;
@@ -553,7 +564,7 @@ bool platform_display_register_lvgl_driver(void) {
 
     // Allocate and clear draw buffers in internal RAM (required for SPI DMA)
     // Note: PSRAM cannot be used with SPI LCD DMA transfers
-    size_t buf_size = LCD_H_RES * LVGL_BUF_HEIGHT * sizeof(lv_color_t);
+    size_t buf_size = LCD_H_RES * LVGL_BUF_HEIGHT * sizeof(uint16_t);
     void *buf1 = heap_caps_calloc(1, buf_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     void *buf2 = heap_caps_calloc(1, buf_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     if (!buf1 || !buf2) {
@@ -562,6 +573,7 @@ bool platform_display_register_lvgl_driver(void) {
     }
     ESP_LOGI(TAG, "Allocated %zu bytes for each draw buffer", buf_size);
 
+    lv_display_set_color_format(s_display, LV_COLOR_FORMAT_RGB565);
     lv_display_set_buffers(s_display, buf1, buf2, buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(s_display, lvgl_flush_cb);
     lv_display_set_user_data(s_display, s_panel_handle);
@@ -642,12 +654,13 @@ void platform_display_process_pending(void) {
         s_pending_art_mode = false;
         display_art_mode();
     }
-    // Process deferred exit art mode (swipe down)
-    if (s_pending_exit_art_mode) {
-        s_pending_exit_art_mode = false;
-        // Only exit if in art mode - use display_wake which handles state properly
-        if (display_get_state() == DISPLAY_STATE_ART_MODE) {
-            display_wake();  // Returns to normal state with controls visible
+    if (s_pending_zone_picker) {
+        s_pending_zone_picker = false;
+        if (!admin_settings_input_blocked() && !valve_ui_visible() &&
+            !ui_is_zone_picker_visible() && !ui_is_settings_visible()) {
+            if (display_get_state() == DISPLAY_STATE_ART_MODE) display_wake();
+            const controller_action_t action = {.kind = CONTROLLER_ACTION_OPEN_ZONE_PICKER};
+            (void)controller_input_dispatch_action(&action);
         }
     }
     // Process deferred timer-triggered state changes
@@ -663,7 +676,7 @@ void platform_display_cancel_input(void) {
     s_touch_until_release = true;
     s_pending_page_switch = false;
     s_pending_art_mode = false;
-    s_pending_exit_art_mode = false;
+    s_pending_zone_picker = false;
     s_last_tap_time = 0;
 }
 
@@ -706,6 +719,6 @@ int platform_battery_get_level(void) {
 
 void platform_display_playlist_transition(void) {
     if(s_touch_indev)lv_indev_reset(s_touch_indev,NULL);
-    s_last_tap_time=0;s_pending_art_mode=false;s_pending_exit_art_mode=false;s_pending_page_switch=false;
+    s_last_tap_time=0;s_pending_art_mode=false;s_pending_zone_picker=false;s_pending_page_switch=false;
     /* Opening is already owned by playlist_ui_touch through its release. */
 }

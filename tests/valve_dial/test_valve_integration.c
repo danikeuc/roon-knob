@@ -38,15 +38,15 @@ void platform_display_cancel_input(void) {valve_ui_cancel_touch();}
 
 static uint32_t fake_now = 1000;
 static int posts, gets, valve_indicator;
-static lv_obj_t objects[80];
+static lv_obj_t objects[160];
 static unsigned object_count;
 static lv_obj_t screen;
-struct fake_queue { unsigned capacity, count, head; size_t item_size; unsigned char data[4][256]; };
+struct fake_queue { unsigned capacity, count, head; size_t item_size; unsigned char data[4][512]; };
 static struct fake_queue queue;
 int64_t esp_timer_get_time(void) { return (int64_t)fake_now * 1000; }
 static uint64_t client_clock(void) { return fake_now; }
 QueueHandle_t xQueueCreate(unsigned capacity, size_t item_size) {
-    assert(capacity == 4 && item_size <= 256);
+    assert(capacity == 4 && item_size <= 512);
     queue = (struct fake_queue){.capacity = capacity, .item_size = item_size};
     return &queue;
 }
@@ -67,7 +67,7 @@ int xQueueReceive(QueueHandle_t q, void *item, unsigned ticks) {
 }
 void xQueueReset(QueueHandle_t q) { q->head = q->count = 0; }
 lv_obj_t *lv_screen_active(void) { return &screen; }
-lv_obj_t *lv_obj_create(lv_obj_t *p) { (void)p; assert(object_count < 80); return &objects[object_count++]; }
+lv_obj_t *lv_obj_create(lv_obj_t *p) { (void)p; assert(object_count < 160); return &objects[object_count++]; }
 lv_obj_t *lv_label_create(lv_obj_t *p) { return lv_obj_create(p); }
 lv_obj_t *lv_btn_create(lv_obj_t *p) { return lv_obj_create(p); }
 void lv_obj_set_size(lv_obj_t *o, int w, int h) { (void)o;(void)w;(void)h; }

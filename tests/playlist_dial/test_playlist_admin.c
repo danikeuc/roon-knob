@@ -4,6 +4,10 @@
 #include <string.h>
 int main(void) {
  playlist_favorites_t f;
+ const char *shared="{\"version\":1,\"max_favorites\":5,\"replace_queue\":true,\"shared_playlists\":true}";
+ assert(playlist_capabilities_valid(shared,strlen(shared)));
+ const char *badshared="{\"version\":1,\"max_favorites\":5,\"replace_queue\":true,\"shared_playlists\":\"true\"}";
+ assert(!playlist_capabilities_valid(badshared,strlen(badshared)));
  const char *valid="{\"revision\":3,\"core_epoch\":7,\"zone_id\":\"sauna\",\"zone_name\":\"Sauna\",\"favorites\":[{\"id\":\"opaque\",\"title\":\"<img src=x onerror=evil()>\",\"available\":true,\"reason\":null}]}";
  assert(playlist_favorites_parse(valid,strlen(valid),&f)&&f.count==1&&!strcmp(f.entries[0].id,"opaque")&&!strcmp(f.zone_name,"Sauna"));
  assert(!playlist_favorites_parse("{\"revision\\u0000evil\":3}",24,&f));

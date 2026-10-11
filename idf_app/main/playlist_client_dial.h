@@ -1,8 +1,8 @@
 #pragma once
 #include "controller_playlist.h"
-typedef enum { PLAYLIST_CLIENT_ERROR=1,PLAYLIST_CLIENT_FAVORITES,PLAYLIST_CLIENT_ACCEPTED,PLAYLIST_CLIENT_PLAYING,PLAYLIST_CLIENT_UNKNOWN } playlist_client_status_t;
+typedef enum { PLAYLIST_CLIENT_ERROR=1,PLAYLIST_CLIENT_FAVORITES,PLAYLIST_CLIENT_ACCEPTED,PLAYLIST_CLIENT_PLAYING,PLAYLIST_CLIENT_UNKNOWN,PLAYLIST_CLIENT_WAITING } playlist_client_status_t;
 typedef struct { char base[129],zone[129],token[129];uint32_t generation,session,credential_generation; } playlist_endpoint_t;
-typedef struct { const char *method,*path,*body,*token,*url;uint64_t deadline_ms;bool (*valid)(void *);void *context; } playlist_http_request_t;
+typedef struct { const char *method,*path,*body,*token,*url,*zone;uint64_t deadline_ms;bool (*valid)(void *);void *context; } playlist_http_request_t;
 typedef struct { playlist_client_status_t status;playlist_favorites_t favorites;char request_id[37],zone[129];uint32_t generation; } playlist_client_result_t;
 bool playlist_client_init(void);
 void playlist_client_connected(bool);

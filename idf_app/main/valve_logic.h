@@ -9,6 +9,16 @@ typedef enum { VALVE_ACTION_START, VALVE_ACTION_DRAIN, VALVE_ACTION_WEATHER_STAR
 typedef enum { VALVE_OPERATION_UNKNOWN, VALVE_MANUAL_IDLE, VALVE_MANUAL_ACTIVE,
                VALVE_AUTO_SUPPLY, VALVE_USER_OFF, VALVE_FAULT } valve_operation_t;
 #define VALVE_MAX_REVISION UINT64_C(9007199254740991)
+#define VALVE_FORECAST_DAYS 5
+/* Read-only telemetry, never a control capability. Day zero is the Pi's local today. */
+typedef struct {
+    bool available, stale, codes_available;
+    char dates[VALVE_FORECAST_DAYS][11];
+    char checked_at[41];
+    float minima_c[VALVE_FORECAST_DAYS];
+    uint8_t weather_codes[VALVE_FORECAST_DAYS];
+} valve_forecast_t;
+bool valve_weather_code_valid(unsigned code);
 typedef struct { valve_action_t action; uint16_t duration_seconds; } valve_request_t;
 typedef struct {
     valve_state_t state;
@@ -23,6 +33,7 @@ typedef struct {
     float pipe_temperature_c;
     bool temperature_available;
     bool timed_shower_duration_supported;
+    valve_forecast_t forecast;
 } valve_status_t;
 bool valve_json_object_valid(const char *json, size_t length);
 bool valve_status_parse(const char *json, size_t len, valve_status_t *out);

@@ -148,8 +148,13 @@ static bool artwork_current(void *context) {
     artwork_request_t *r=context;controller_config_endpoint_token_t endpoint;char zone[129];
     return r->generation==atomic_load(&artwork_generation)&&controller_config_capture_endpoint_token(&endpoint)&&endpoint.generation==r->endpoint_generation&&bridge_client_get_current_zone_id(zone,sizeof zone)&&!strcmp(zone,r->zone)&&bridge_client_is_bridge_connected();
 }
+/* The installed Xtensa build uses at least 3536 bytes just for the nested
+ * worker -> HTTP -> current-zone frames. A 4096-byte task overflows when the
+ * HTTP/RTOS calls add their frames. Keep headroom and measure it on hardware. */
+#define ARTWORK_TASK_STACK_BYTES 8192
 static void artwork_worker(void *unused) {
     (void)unused;artwork_request_t request;
+    unsigned lowest_stack_free = ARTWORK_TASK_STACK_BYTES;
     for(;;)if(xQueueReceive(artwork_jobs,&request,portMAX_DELAY)==pdTRUE){
         artwork_result_t result;
         if(xQueueReceive(artwork_results,&result,0)==pdTRUE)free(result.pixels);
@@ -158,11 +163,17 @@ static void artwork_worker(void *unused) {
         /* The sole producer removed the previous result before fetching. Kernel
          * queue ownership lets the lower-priority UI run without a busy spin. */
         result.request=request;result.pixels=pixels;xQueueOverwrite(artwork_results,&result);
+        unsigned stack_free = (unsigned)uxTaskGetStackHighWaterMark(NULL);
+        if (stack_free < lowest_stack_free) {
+            lowest_stack_free = stack_free;
+            ESP_LOGI(UI_TAG, "Artwork stack free=%u/%u fetch_ok=%d",
+                     stack_free, ARTWORK_TASK_STACK_BYTES, pixels != NULL);
+        }
     }
 }
 static void artwork_init(void){
     artwork_jobs=xQueueCreate(1,sizeof(artwork_request_t));artwork_results=xQueueCreate(1,sizeof(artwork_result_t));
-    if(!artwork_jobs||!artwork_results||xTaskCreate(artwork_worker,"dial_artwork",4096,NULL,2,NULL)!=pdPASS){if(artwork_jobs)vQueueDelete(artwork_jobs);if(artwork_results)vQueueDelete(artwork_results);artwork_jobs=NULL;artwork_results=NULL;}
+    if(!artwork_jobs||!artwork_results||xTaskCreate(artwork_worker,"dial_artwork",ARTWORK_TASK_STACK_BYTES,NULL,2,NULL)!=pdPASS){if(artwork_jobs)vQueueDelete(artwork_jobs);if(artwork_results)vQueueDelete(artwork_results);artwork_jobs=NULL;artwork_results=NULL;}
 }
 #endif
 

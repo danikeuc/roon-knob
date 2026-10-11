@@ -3,6 +3,17 @@
 #include "weather_admin_dial.h"
 #include "playlist_admin_dial.h"
 #include "cJSON.h"
+#include "bridge_client.h"
+#include "esp_heap_caps.h"
+#include "controller_input.h"
+#include "playlist_ui_dial.h"
+#include "platform/platform_task.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <stdatomic.h>
+/* UI actor hooks; never called on the HTTP worker. */
+void ui_hide_zone_picker(void);
+void platform_display_cancel_input(void);
 #include "esp_netif.h"
 #include "mbedtls/sha256.h"
 #include <stdio.h>
@@ -371,6 +382,22 @@ static esp_err_t settings_handler(httpd_req_t *req) {
     return settings_reply(req, result, &value);
 }
 
+static esp_err_t shower_history_handler(httpd_req_t *req) {
+    if(!admin_http_authorize(req,false))return ESP_OK;
+    uint32_t offset=0;const char *query=strchr(req->uri,'?');
+    if(query) {
+        if(strncmp(query,"?offset=",8)||!query[8])return reply(req,"422 Unprocessable Entity","{\"error\":\"invalid\"}");
+        for(const char *p=query+8;*p;p++) {
+            if(*p<'0'||*p>'9'||offset>(SHOWER_HISTORY_OFFSET_MAX-(unsigned)(*p-'0'))/10u)
+                return reply(req,"422 Unprocessable Entity","{\"error\":\"invalid\"}");
+            offset=offset*10u+(unsigned)(*p-'0');
+        }
+    }
+    char *body=NULL;bool ok=shower_history_get(offset,&body);
+    if(!admin_http_authorize(req,false)){free(body);return ESP_OK;}
+    esp_err_t result=ok?reply(req,"200 OK",body):reply(req,"503 Service Unavailable","{\"error\":\"unavailable\"}");
+    free(body);return result;
+}
 static esp_err_t weather_handler(httpd_req_t *req) {
     bool write=req->method==HTTP_PUT;
     if(!admin_http_authorize(req,write))return ESP_OK;
@@ -434,6 +461,106 @@ static esp_err_t playlist_handler(httpd_req_t *req) {
     if(status==413)return reply(req,"413 Content Too Large","{\"error\":\"too_large\"}");
     return reply(req,"503 Service Unavailable","{\"error\":\"unconfirmed\"}");
 }
+
+/* Copy only while the bridge lock is held; JSON allocation and persistence run
+ * after the visitor returns. Never retain bridge-owned pointers. */
+typedef struct {
+    bridge_zone_t zones[BRIDGE_CLIENT_MAX_ZONES];
+    unsigned count;
+    char current[64];
+    bool valid;
+} admin_zones_t;
+static bool roon_zone_id(const char *id) {
+    if(!id || strncmp(id,"roon:",5) || !id[5] || strlen(id)>=64)return false;
+    for(const unsigned char *c=(const unsigned char *)id;*c;c++)if(*c<=32||*c==127)return false;
+    return true;
+}
+static void copy_admin_zones(const bridge_zone_t *zones,int count,const char *current,void *arg) {
+    admin_zones_t *out=arg;
+    if(count<0||count>BRIDGE_CLIENT_MAX_ZONES||!current||strlen(current)>=sizeof out->current)return;
+    strcpy(out->current,current);
+    for(int i=0;i<count;i++)if(roon_zone_id(zones[i].id))out->zones[out->count++]=zones[i];
+    out->valid=true;
+}
+static admin_zones_t *read_admin_zones(void) {
+    if(!bridge_client_is_bridge_connected())return NULL;
+    admin_zones_t *out=heap_caps_calloc(1,sizeof *out,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);if(!out)return NULL;
+    if(!bridge_client_visit_zones(copy_admin_zones,out)||!out->valid){free(out);return NULL;}
+    return out;
+}
+static bool zone_in_snapshot(const admin_zones_t *zones,const char *id) {
+    for(unsigned i=0;i<zones->count;i++)if(!strcmp(zones->zones[i].id,id))return true;
+    return false;
+}
+static esp_err_t zones_reply(httpd_req_t *req) {
+    admin_zones_t *zones=read_admin_zones();if(!zones)return result_reply(req,ADMIN_STORAGE_ERROR);
+    cJSON *root=cJSON_CreateObject(),*list=root?cJSON_AddArrayToObject(root,"zones"):NULL;
+    bool ok=list && cJSON_AddStringToObject(root,"current_zone_id",zones->current);
+    for(unsigned i=0;ok&&i<zones->count;i++) {
+        cJSON *entry=cJSON_CreateObject();
+        ok=entry && cJSON_AddStringToObject(entry,"id",zones->zones[i].id) && cJSON_AddStringToObject(entry,"name",zones->zones[i].name);
+        if(ok)ok=cJSON_AddItemToArray(list,entry);
+        if(!ok)cJSON_Delete(entry);
+    }
+    free(zones);char *body=ok?cJSON_PrintUnformatted(root):NULL;cJSON_Delete(root);
+    if(!body)return result_reply(req,ADMIN_STORAGE_ERROR);
+    esp_err_t result=reply(req,"200 OK",body);free(body);return result;
+}
+typedef struct {
+    atomic_uint references;
+    atomic_int phase; /* pending, running, done, cancelled */
+    char target[64],expected[64];
+    admin_result_t result;
+} admin_zone_job_t;
+static atomic_flag zone_admission=ATOMIC_FLAG_INIT;
+static void zone_job_release(admin_zone_job_t *job){if(atomic_fetch_sub(&job->references,1)==1)free(job);}
+static void select_admin_zone_ui(void *arg) {
+    admin_zone_job_t *job=arg;int pending=0;
+    if(!atomic_compare_exchange_strong(&job->phase,&pending,1)){zone_job_release(job);return;}
+    admin_zones_t *zones=read_admin_zones();job->result=ADMIN_STORAGE_ERROR;
+    if(zones) {
+        if(strcmp(zones->current,job->expected))job->result=ADMIN_CONFLICT;
+        else if(!zone_in_snapshot(zones,job->target))job->result=ADMIN_INVALID;
+        else if(!strcmp(job->target,zones->current))job->result=ADMIN_OK;
+        else {
+            /* Cancels stale gestures and playlist proofs before the zone changes. */
+            controller_interaction_context_t context=controller_input_get_context();
+            platform_display_cancel_input();playlist_ui_cancel();ui_hide_zone_picker();
+            /* Only the dismissed zone/playlist overlays return to media. */
+            if(context==CONTROLLER_INTERACTION_CONTEXT_ZONE_PICKER || context==CONTROLLER_INTERACTION_CONTEXT_PLAYLIST_PICKER)
+                controller_input_set_context(CONTROLLER_INTERACTION_CONTEXT_MEDIA);
+            bridge_zone_selection_result_t selected=bridge_client_select_zone_value(job->target);
+            char actual[64]={0};
+            if(selected.found&&selected.persisted&&bridge_client_get_current_zone_id(actual,sizeof actual)&&!strcmp(actual,job->target))job->result=ADMIN_OK;
+        }
+        free(zones);
+    }
+    atomic_store(&job->phase,2);zone_job_release(job);
+}
+static esp_err_t zones_handler(httpd_req_t *req) {
+    bool write=req->method==HTTP_PUT;
+    if(!admin_http_authorize(req,write))return ESP_OK;
+    if(!write)return zones_reply(req);
+    cJSON *json=read_json(req);if(!json)return ESP_OK;
+    const char *target=string_field(json,"zone_id"),*expected=string_field(json,"expected_current_zone_id");
+    bool valid=cJSON_GetArraySize(json)==2&&roon_zone_id(target)&&expected&&strlen(expected)<64;
+    if(!valid){cJSON_Delete(json);return result_reply(req,ADMIN_INVALID);}
+    if(atomic_flag_test_and_set(&zone_admission)){cJSON_Delete(json);return result_reply(req,ADMIN_CONFLICT);}
+    admin_zone_job_t *job=calloc(1,sizeof *job);
+    if(!job){cJSON_Delete(json);atomic_flag_clear(&zone_admission);return result_reply(req,ADMIN_STORAGE_ERROR);}
+    atomic_init(&job->references,2);atomic_init(&job->phase,0);strcpy(job->target,target);strcpy(job->expected,expected);cJSON_Delete(json);
+    admin_result_t result=ADMIN_STORAGE_ERROR;
+    if(platform_task_post_to_ui(select_admin_zone_ui,job)) {
+        for(unsigned i=0;i<(unsigned)pdMS_TO_TICKS(1500)+1u;i++) {
+            if(atomic_load(&job->phase)==2){result=job->result;break;}
+            vTaskDelay(1);
+        }
+        int pending=0;atomic_compare_exchange_strong(&job->phase,&pending,3);
+    }else zone_job_release(job);
+    zone_job_release(job);atomic_flag_clear(&zone_admission);
+    if(!admin_http_authorize(req,false))return ESP_OK;
+    return result==ADMIN_OK?zones_reply(req):result_reply(req,result);
+}
 esp_err_t admin_server_register(httpd_handle_t server) {
     if(!weather_admin_init())return ESP_FAIL;
     const httpd_uri_t routes[] = {
@@ -446,9 +573,12 @@ esp_err_t admin_server_register(httpd_handle_t server) {
         {.uri="/admin/api/logout", .method=HTTP_POST, .handler=auth_handler},
         {.uri="/admin/api/pin", .method=HTTP_POST, .handler=auth_handler},
         {.uri="/admin/api/recovery-code", .method=HTTP_POST, .handler=auth_handler},
+        {.uri="/admin/api/roon/zones", .method=HTTP_GET, .handler=zones_handler},
+        {.uri="/admin/api/roon/zone", .method=HTTP_PUT, .handler=zones_handler},
         {.uri="/admin/api/roon/playlists", .method=HTTP_GET, .handler=playlist_handler},
         {.uri="/admin/api/roon/favorites", .method=HTTP_GET, .handler=playlist_handler},
         {.uri="/admin/api/roon/favorites", .method=HTTP_PUT, .handler=playlist_handler},
+        {.uri="/admin/api/shower-history", .method=HTTP_GET, .handler=shower_history_handler},
         {.uri="/admin/api/weather", .method=HTTP_GET, .handler=weather_handler},
         {.uri="/admin/api/weather", .method=HTTP_PUT, .handler=weather_handler},
         {.uri="/admin/api/settings", .method=HTTP_GET, .handler=settings_handler},

@@ -60,7 +60,7 @@ void runtime_wait_cleanup(unsigned count) {
     assert(atomic_load(&fixture_cleanups)>=count && atomic_load(&released_jobs)>=count);
 #endif
 }
-struct fake_http { esp_http_client_method_t method;int timeout;char response[2048];size_t offset;bool weather; };
+struct fake_http { esp_http_client_method_t method;int timeout;char response[2048];size_t offset;bool weather;bool target_header; };
 esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *config) {
     struct fake_http *client=calloc(1,sizeof *client);assert(client);
     assert(strstr(config->url,"/roon/dial/v1/"));
@@ -72,6 +72,7 @@ esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *co
     return client;
 }
 esp_err_t esp_http_client_set_header(esp_http_client_handle_t client,const char *name,const char *value) {
+    if(!strcmp(name,"X-Dial-Zone")){assert(!strcmp(value,"sauna"));client->target_header=true;}
     if(!strcmp(name,"Authorization"))assert(!strcmp(value,"Bearer synthetic-private"));
     if(!strcmp(name,"X-Display-Token"))assert(!client->weather && !strcmp(value,"private-test-token"));
     if(!strcmp(name,"X-Weather-Settings-Token"))assert(client->weather && !strcmp(value,"private-weather-http"));
@@ -81,7 +82,7 @@ esp_err_t esp_http_client_set_timeout_ms(esp_http_client_handle_t client,int val
     assert(value>0 && value<=3000);client->timeout=value;atomic_store(&fixture_last_timeout,(unsigned)value);return ESP_OK;
 }
 esp_err_t esp_http_client_open(esp_http_client_handle_t client,int length) {
-    (void)length;
+    (void)length;assert(client->target_header);
     if(scenario==HTTP_ACTION_EXPIRED_OPEN&&client->method==HTTP_METHOD_POST)atomic_store(&changed_zone,true);
     if(scenario==HTTP_WEATHER_STALLED_OPEN) {
 #ifdef COMBINED_ISOLATION

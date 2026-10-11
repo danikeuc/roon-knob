@@ -838,11 +838,11 @@ static esp_err_t ble_get_handler(httpd_req_t *req) {
                 "<p class='hint'>Put the remote into pairing mode, then start a scan.</p>"
                 "<form method='POST' action='/ble-scan'>"
                 "<button type='submit'%s>%s</button></form>",
-                status.state == RK_BLE_HID_HOST_STATE_SCANNING ? " disabled" : "",
+                status.state != RK_BLE_HID_HOST_STATE_READY ? " disabled" : "",
                 status.state == RK_BLE_HID_HOST_STATE_SCANNING
                     ? "Scanning…" : "Scan for remotes");
 
-            if (status.state != RK_BLE_HID_HOST_STATE_SCANNING) {
+            if (status.state == RK_BLE_HID_HOST_STATE_READY) {
             for (size_t i = 0; i < result_count && pos < (int)html_size; i++) {
                 char escaped_result[RK_BLE_HID_HOST_NAME_MAX_LEN * 2];
                 html_escape(results[i].name, escaped_result,
@@ -1006,7 +1006,7 @@ void config_server_start(void) {
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
-    config.max_uri_handlers = 28;
+    config.max_uri_handlers = 31;
     // The measured config-save path, including HTTP dispatch, uses 8256 bytes
     // before task-wrapper/context overhead. Reserve additional runtime headroom;
     // target stack high-water and device acceptance remain separate checks.

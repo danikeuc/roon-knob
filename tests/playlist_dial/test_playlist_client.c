@@ -21,7 +21,7 @@ int main(void){
  playlist_client_result_t r;assert(playlist_client_take(&r)&&r.status==PLAYLIST_CLIENT_FAVORITES&&r.favorites.count==1);
  assert(playlist_client_request_play("opaque",3,7));playlist_client_test_run();assert(prepare==1&&play==1);assert(playlist_client_take(&r)&&r.status==PLAYLIST_CLIENT_ACCEPTED);
  now+=1000;playlist_client_process();playlist_client_test_run();assert(receipts==1&&play==1&&playlist_client_take(&r)&&r.status==PLAYLIST_CLIENT_UNKNOWN);
- timeout=true;assert(playlist_client_request_play("opaque",3,7));playlist_client_test_run();assert(play==2);playlist_client_take(&r);now+=1000;playlist_client_process();playlist_client_test_run();assert(play==2&&receipts==2);
+ timeout=true;assert(playlist_client_request_play("opaque",3,7));playlist_client_test_run();assert(play==2);assert(playlist_client_take(&r)&&r.status==PLAYLIST_CLIENT_WAITING);now+=1000;playlist_client_process();playlist_client_test_run();assert(play==2&&receipts==2);
  expire=true;assert(playlist_client_request_play("opaque",3,7));playlist_client_test_run();assert(play==2);playlist_client_take(&r);expire=false;
  zone_change=true;assert(playlist_client_request_play("opaque",3,7));playlist_client_test_run();assert(play==2);zone_change=false;
  old=true;assert(playlist_client_request_favorites());playlist_client_test_run();assert(playlist_client_take(&r)&&r.status==PLAYLIST_CLIENT_ERROR);

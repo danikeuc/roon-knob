@@ -1,6 +1,6 @@
 """Compile the actual production flush callback, with only LCD/LVGL I/O faked."""
 from pathlib import Path
-import subprocess, tempfile, os
+import subprocess, tempfile, os, re
 source=Path('idf_app/main/platform_display_idf.c').read_text()
 start=source.index('static uint8_t *s_rotate_buf')
 end=source.index('// LVGL tick timer callback',start)
@@ -19,7 +19,7 @@ preamble=r'''
 #define ESP_ERROR_CHECK(x) assert((x)==0)
 #define LV_DISPLAY_ROTATION_180 2
 #define LV_DISPLAY_ROTATION_90 1
-#define LVGL_BUF_HEIGHT 24
+
 #define ESP_OK 0
 #define ESP_FAIL -1
 typedef int esp_err_t;
@@ -62,6 +62,26 @@ int main(void){
    assert(frame[py*360+px]==v);
   }
   free(pixels);
+  /* Exercise the configured small DMA strips across a complete frame, with
+   * canaries proving rotation never writes beyond either end of a strip. */
+  memset(frame,0,sizeof(frame));
+  const int strip_pixels=360*LVGL_BUF_HEIGHT;
+  uint16_t *guarded=malloc((strip_pixels+2)*sizeof(uint16_t));assert(guarded);
+  for(int top=0;top<360;top+=LVGL_BUF_HEIGHT){
+   int rows=360-top<LVGL_BUF_HEIGHT?360-top:LVGL_BUF_HEIGHT;
+   guarded[0]=0xabcd;guarded[strip_pixels+1]=0xdcba;
+   for(int i=0;i<360*rows;i++)guarded[i+1]=(uint16_t)(top*360+i+1);
+   lv_area_t strip={0,top,359,top+rows-1};
+   lvgl_flush_cb(0,&strip,(uint8_t*)(guarded+1));
+   assert(guarded[0]==0xabcd && guarded[strip_pixels+1]==0xdcba);
+  }
+  for(int y=0;y<360;y++)for(int x=0;x<360;x++){
+   int px=x,py=y;
+   if(a==1){px=359-y;py=x;}if(a==2){px=359-x;py=359-y;}if(a==3){px=y;py=359-x;}
+   uint16_t v=(uint16_t)(y*360+x+1);v=(uint16_t)((v>>8)|(v<<8));
+   assert(frame[py*360+px]==v);
+  }
+  free(guarded);
   /* Unequal edge partials reuse the same DMA allocation back-to-back. */
   uint16_t partial[24]={0};
   for(int pass=0;pass<2;pass++){
@@ -80,6 +100,6 @@ int main(void){
 }
 '''
 with tempfile.TemporaryDirectory() as d:
- p=Path(d)/'driver.c';p.write_text(preamble+source[start:end]+main)
+ p=Path(d)/'driver.c';p.write_text(preamble+re.search(r'^#define LVGL_BUF_HEIGHT \d+',source,re.M).group(0)+'\n'+source[start:end]+main)
  subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-Wno-c23-extensions','-Wno-unused-function','-Wno-unused-variable','-Iidf_app/main',str(p),'idf_app/main/display_rotation_dial.c','-o',d+'/test'],check=True)
  subprocess.run([d+'/test'],check=True)

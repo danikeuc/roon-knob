@@ -204,6 +204,116 @@ static bool temperature_token(const char *json, const jsmntok_t *tok, float *val
     *value = (float)parsed;
     return true;
 }
+bool valve_weather_code_valid(unsigned code) {
+    switch (code) {
+    case 0: case 1: case 2: case 3: case 45: case 48:
+    case 51: case 53: case 55: case 56: case 57:
+    case 61: case 63: case 65: case 66: case 67:
+    case 71: case 73: case 75: case 77: case 80: case 81: case 82:
+    case 85: case 86: case 95: case 96: case 97: case 99: return true;
+    default: return false;
+    }
+}
+static bool primitive_true(const char *json, const jsmntok_t *tok) {
+    return tok->type == JSMN_PRIMITIVE && tok->end - tok->start == 4 &&
+        !memcmp(json + tok->start, "true", 4);
+}
+static bool forecast_date(const char *text, int length, char out[11]) {
+    if (length != 10 || text[4] != '-' || text[7] != '-') return false;
+    for (int i = 0; i < 10; ++i)
+        if (i != 4 && i != 7 && (text[i] < '0' || text[i] > '9')) return false;
+    int year = (text[0]-'0')*1000+(text[1]-'0')*100+(text[2]-'0')*10+text[3]-'0';
+    int month = (text[5]-'0')*10+text[6]-'0', day = (text[8]-'0')*10+text[9]-'0';
+    const int days[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+    if (year < 1900 || month < 1 || month > 12 || day < 1 ||
+        day > days[month-1] + (month == 2 && year%4 == 0 && (year%100 != 0 || year%400 == 0))) return false;
+    memcpy(out, text, 10); out[10] = 0; return true;
+}
+static int forecast_day_number(const char date[11]) {
+    int year=atoi(date),month=atoi(date+5),day=atoi(date+8);
+    static const int before_month[]={0,31,59,90,120,151,181,212,243,273,304,334};
+    int previous=year-1;
+    return previous*365+previous/4-previous/100+previous/400+before_month[month-1]+day+
+        (month>2 && year%4==0 && (year%100!=0 || year%400==0));
+}
+static bool forecast_timestamp(const char *text,int length) {
+    char date[11];
+    if(length<20 || length>40 || !forecast_date(text,10,date) || text[10]!='T' || text[13]!=':' || text[16]!=':')return false;
+    const int positions[]={11,12,14,15,17,18};
+    for(unsigned i=0;i<6;++i)if(text[positions[i]]<'0'||text[positions[i]]>'9')return false;
+    if((text[11]-'0')*10+text[12]-'0'>23 || (text[14]-'0')*10+text[15]-'0'>59 ||
+       (text[17]-'0')*10+text[18]-'0'>59)return false;
+    int i=19;
+    if(text[i]=='.') {
+        int start=++i;
+        while(i<length && text[i]>='0'&&text[i]<='9')++i;
+        if(i==start || i-start>6)return false;
+    }
+    if(i==length-1 && text[i]=='Z')return true;
+    if(length-i!=6 || (text[i]!='+'&&text[i]!='-') || text[i+3]!=':')return false;
+    for(int n=1;n<6;++n)if(n!=3&&(text[i+n]<'0'||text[i+n]>'9'))return false;
+    return (text[i+1]-'0')*10+text[i+2]-'0'<=23 && (text[i+4]-'0')*10+text[i+5]-'0'<=59;
+}
+static bool forecast_parse(const char *json, const jsmntok_t *tokens, int count,
+                           int object, valve_forecast_t *out) {
+    if (tokens[object].type != JSMN_OBJECT) return false;
+    const char *names[] = {"available", "reason", "dates", "minima_c", "last_successful_check", "weather_codes"};
+    int fields[6] = {-1,-1,-1,-1,-1,-1};
+    for (int i = object+1; i < count && tokens[i].start < tokens[object].end;) {
+        if (tokens[i].type != JSMN_STRING || i+1 >= count) return false;
+        for (int n = 0; n < 6; ++n) if (equal_optional_key(json, &tokens[i], names[n])) {
+            if (fields[n] != -1) {
+                if (n == 5) fields[n] = -2; /* Invalid optional codes cannot hide minima. */
+                else return false;
+            } else fields[n] = i+1;
+        }
+        i = next_token(tokens, count, i+1);
+    }
+    for (int n = 0; n < 5; ++n) if (fields[n] < 0) return false;
+    out->stale = equal_token(json, &tokens[fields[1]], "weather_stale");
+    if (!primitive_true(json, &tokens[fields[0]]) ||
+        (!equal_token(json, &tokens[fields[1]], "eligible") &&
+         !equal_token(json, &tokens[fields[1]], "cold_forecast"))) return false;
+    const jsmntok_t *last = &tokens[fields[4]];
+    int length = last->end-last->start;
+    if (last->type != JSMN_STRING || !forecast_timestamp(json+last->start,length)) return false;
+    memcpy(out->checked_at, json+last->start, (size_t)length);
+    for (int field = 2; field <= 3; ++field) {
+        int array = fields[field], item = array+1;
+        if (tokens[array].type != JSMN_ARRAY || tokens[array].size != VALVE_FORECAST_DAYS) return false;
+        for (int day = 0; day < VALVE_FORECAST_DAYS; ++day) {
+            if (item >= count) return false;
+            const jsmntok_t *tok = &tokens[item];
+            if (field == 2) {
+                if (tok->type != JSMN_STRING || !forecast_date(json+tok->start, tok->end-tok->start, out->dates[day]) ||
+                    (day && forecast_day_number(out->dates[day])-forecast_day_number(out->dates[day-1]) != 1)) return false;
+            } else {
+                /* Weather range is wider below zero than pipe telemetry. */
+                if (tok->type != JSMN_PRIMITIVE || tok->end-tok->start >= 48) return false;
+                char number[48]; int n=tok->end-tok->start;
+                memcpy(number,json+tok->start,(size_t)n); number[n]=0;
+                char *end; double minimum=strtod(number,&end);
+                if (end != number+n || !isfinite(minimum) || minimum < -100 || minimum > 100) return false;
+                out->minima_c[day]=(float)minimum;
+            }
+            item = next_token(tokens,count,item);
+        }
+    }
+    out->available = true;
+    int codes = fields[5];
+    if (codes >= 0 && tokens[codes].type == JSMN_ARRAY && tokens[codes].size == VALVE_FORECAST_DAYS) {
+        bool valid = true; int item = codes+1;
+        for (int day=0; day<VALVE_FORECAST_DAYS; ++day) {
+            uint16_t code;
+            if (item >= count || !number_token(json,&tokens[item],&code) || !valve_weather_code_valid(code)) { valid=false; break; }
+            out->weather_codes[day]=(uint8_t)code;
+            item=next_token(tokens,count,item);
+        }
+        out->codes_available=valid;
+        if (!valid) memset(out->weather_codes,0,sizeof out->weather_codes);
+    }
+    return true;
+}
 bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
     if (!out) return false;
     memset(out, 0, sizeof *out);
@@ -219,6 +329,8 @@ bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
     for (int p = 0; p < tokens[0].start; p++)
         if (!isspace((unsigned char)json[p])) return false;
     unsigned seen = 0;
+    int forecast_object = -1;
+    bool forecast_duplicate = false;
     bool temperature_seen = false, temperature_valid = false;
     bool health_seen = false, health_valid = false;
     bool capability_seen = false, capability_valid = false;
@@ -291,6 +403,9 @@ bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
                 }
                 memcpy(out->action_nonce,json+val->start,43);
             }
+        } else if (equal_optional_key(json, key, "weather")) {
+            if (forecast_object >= 0) forecast_duplicate = true;
+            else forecast_object = i+1;
         } else if (equal_optional_key(json, key, "pipe_temperature_c")) {
             if (temperature_seen) temperature_valid = false;
             else temperature_valid = temperature_token(json, val, &temperature);
@@ -326,6 +441,11 @@ bool valve_status_parse(const char *json, size_t len, valve_status_t *out) {
     } else if (drain_state && drain_command && remaining == 0) out->state = VALVE_DRAIN;
     else if (supply_state && supply_command && remaining > 0) out->state = VALVE_SUPPLY;
     else return false;
+    if (forecast_object >= 0 && !forecast_duplicate) {
+        valve_forecast_t forecast = {0};
+        if (forecast_parse(json,tokens,count,forecast_object,&forecast)) out->forecast=forecast;
+        else out->forecast.stale=forecast.stale;
+    }
     out->remaining_seconds = remaining;
     out->timed_shower_duration_supported = capability_seen && capability_valid;
     memcpy(out->reason, reason, sizeof reason);

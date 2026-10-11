@@ -614,4 +614,53 @@ static void weather_parse_cases(void) {
     snprintf(altered,sizeof altered,"%.*s\"operation\":\"FUTURE\"%s",(int)(at-weather_fixture_3),weather_fixture_3,at+strlen("\"operation\":\"AUTO_SUPPLY\""));
     assert(!valve_status_parse(altered,strlen(altered),&status));
 }
-int main(void) { weather_parse_cases(); weather_request_cases(); capability_parse_cases(); temperature_parse_cases(); temperature_format_cases(); parse_cases(); request_cases(); scheduling_cases(); start_admission_cases(); completion_order_cases(); recovery_session_cases(); dial_cases(); config_change_cases(); test_duration_cache_ordering(); test_start_captures_selected_duration(); test_legacy_server_uses_empty_600_request(); test_short_setting_with_missing_capability_blocks_start(); puts("valve parser/client tests passed"); }
+static void forecast_parse_cases(void) {
+    const char *dates="[\"2026-10-03\",\"2026-10-04\",\"2026-10-05\",\"2026-10-06\",\"2026-10-07\"]";
+    char body[2048],weather[768],response[2300]; valve_status_t status;
+    const char *optional_codes[]={"",",\"weather_codes\":[]",",\"weather_codes\":[0,61,73,3,97]",
+        ",\"weather_codes\":[0,999,73,3,97]",",\"weather_codes\":[0,61.0,73,3,97]",
+        ",\"weather_codes\":[0,true,73,3,97]",",\"weather_codes\":[0,61]",
+        ",\"weather_codes\":{}",",\"weather_codes\":[0,61,73,3,97],\"weather_codes\":[0,61,73,3,97]"};
+    for(unsigned i=0;i<sizeof optional_codes/sizeof optional_codes[0];++i) {
+        snprintf(weather,sizeof weather,"{\"available\":true,\"reason\":\"cold_forecast\",\"dates\":%s,\"minima_c\":[2.0,-3.25,0,4,5],\"last_successful_check\":\"2026-10-03T10:00:00+00:00\"%s}",dates,optional_codes[i]);
+        snprintf(body,sizeof body,"{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"ready\",\"remaining_seconds\":0,\"weather\":%s}",weather);
+        assert(valve_status_parse(body,strlen(body),&status));
+        assert(status.state==VALVE_DRAIN && status.forecast.available);
+        assert(status.forecast.minima_c[1]==-3.25f && !strcmp(status.forecast.dates[1],"2026-10-04"));
+        assert(!strcmp(status.forecast.checked_at,"2026-10-03T10:00:00+00:00"));
+        assert(status.forecast.codes_available==(i==2));
+        if(i==2)assert(status.forecast.weather_codes[1]==61 && status.forecast.weather_codes[4]==97);
+        assert(!status.weather_assisted && !status.control_revision_available && !status.timed_shower_duration_supported);
+        snprintf(response,sizeof response,"{\"request_id\":\"abc\",\"accepted\":true,\"control_revision\":1,\"status\":%s}",body);
+        assert(valve_action_response_parse(response,strlen(response),"abc",&status));
+    }
+    const char *bad[]={"null","[]","{}","{\"available\":true}",
+        "{\"available\":true,\"reason\":\"eligible\",\"dates\":[],\"minima_c\":[],\"last_successful_check\":null}",
+        "{\"available\":true,\"reason\":\"weather_stale\",\"dates\":[],\"minima_c\":[],\"last_successful_check\":null}"};
+    for(unsigned i=0;i<sizeof bad/sizeof bad[0];++i) {
+        snprintf(body,sizeof body,"{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"ready\",\"remaining_seconds\":0,\"weather\":%s}",bad[i]);
+        assert(valve_status_parse(body,strlen(body),&status) && status.state==VALVE_DRAIN);
+        assert(!status.forecast.available && !status.forecast.codes_available);
+        assert(status.forecast.stale==(i==5));
+    }
+    const char *invalid_minima[]={"[1,2,3,4]","[1,2,3,4,5,6]","[1,null,3,4,5]","[1,101,3,4,5]","[1,-101,3,4,5]","[1,1e999,3,4,5]"};
+    for(unsigned i=0;i<sizeof invalid_minima/sizeof invalid_minima[0];++i) {
+        snprintf(body,sizeof body,"{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"ready\",\"remaining_seconds\":0,\"weather\":{\"available\":true,\"reason\":\"eligible\",\"dates\":%s,\"minima_c\":%s,\"last_successful_check\":\"2026-10-03T10:00:00+00:00\"}}",dates,invalid_minima[i]);
+        assert(valve_status_parse(body,strlen(body),&status) && !status.forecast.available && status.state==VALVE_DRAIN);
+    }
+    const char *timestamps[]={"2026-10-03T10:00:00Z","2026-10-03T10:00:00.123456+00:00",
+        "2026-10-03T99:00:00Z","2026-02-30T10:00:00Z","2026-10-03T10:00:00","2026-10-03T10:00:00.1234567Z"};
+    for(unsigned i=0;i<sizeof timestamps/sizeof timestamps[0];++i) {
+        snprintf(body,sizeof body,"{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"ready\",\"remaining_seconds\":0,\"weather\":{\"available\":true,\"reason\":\"eligible\",\"dates\":%s,\"minima_c\":[1,2,3,4,5],\"last_successful_check\":\"%s\"}}",dates,timestamps[i]);
+        assert(valve_status_parse(body,strlen(body),&status) && status.forecast.available==(i<2));
+        if(i<2) {
+            char *date=strstr(body,"2026-10-04");assert(date);date[9]='6';
+            assert(valve_status_parse(body,strlen(body),&status) && !status.forecast.available);
+        }
+    }
+    /* Missing/duplicate telemetry clears the previously accepted values. */
+    snprintf(body,sizeof body,"{\"mode\":\"manual_timed\",\"state\":\"MANUAL_DRAIN\",\"command\":\"DRAIN\",\"reason\":\"ready\",\"remaining_seconds\":0,\"weather\":%s,\"wea\\u0074her\":%s}",weather,weather);
+    assert(valve_status_parse(body,strlen(body),&status) && !status.forecast.available);
+    assert(valve_status_parse(weather_fixture_0,strlen(weather_fixture_0),&status) && !status.forecast.available);
+}
+int main(void) { forecast_parse_cases(); weather_parse_cases(); weather_request_cases(); capability_parse_cases(); temperature_parse_cases(); temperature_format_cases(); parse_cases(); request_cases(); scheduling_cases(); start_admission_cases(); completion_order_cases(); recovery_session_cases(); dial_cases(); config_change_cases(); test_duration_cache_ordering(); test_start_captures_selected_duration(); test_legacy_server_uses_empty_600_request(); test_short_setting_with_missing_capability_blocks_start(); puts("valve parser/client tests passed"); }

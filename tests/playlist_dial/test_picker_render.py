@@ -10,7 +10,7 @@ preamble = r'''
 #include <stdio.h>
 #include <string.h>
 #include "playlist_admin_dial.h"
-typedef struct {char text[320];} lv_obj_t;
+typedef struct {char text[320];unsigned text_color;} lv_obj_t;
 static lv_obj_t objects[20];static unsigned count;
 #define LV_TEXT_ALIGN_CENTER 0
 #define LV_LABEL_LONG_DOT 0
@@ -24,6 +24,8 @@ static lv_obj_t *lv_obj_create(lv_obj_t *parent){(void)parent;return &objects[co
 #define lv_obj_set_size(...) ((void)0)
 #define lv_obj_center(...) ((void)0)
 #define lv_obj_set_style_bg_color(...) ((void)0)
+#define lv_color_hex(value) (value)
+static void lv_obj_set_style_text_color(lv_obj_t *obj,unsigned color,int selector){(void)selector;obj->text_color=color;}
 #define lv_obj_set_style_bg_opa(...) ((void)0)
 #define lv_obj_align(...) ((void)0)
 #define lv_obj_set_width(...) ((void)0)
@@ -40,7 +42,7 @@ int main(void){
  const char *body="{\"revision\":1,\"core_epoch\":2,\"zone_id\":\"opaque-zone\",\"zone_name\":\"Sauna <target>\",\"favorites\":[]}";
  playlist_favorites_t favorites;assert(playlist_favorites_parse(body,strlen(body),&favorites));
  controller_playlist_t state={0};assert(controller_playlist_open(&state,&favorites,"opaque-zone",10).kind==PLAYLIST_ACTION_RENDER);
- playlist_ui_render(&state,"");assert(contains("Sauna <target>")&&contains("Nazaj"));
+ playlist_ui_render(&state,"");assert(title->text_color==0xF9FAFB&&label->text_color==0xF9FAFB&&target->text_color==0xCBD5E1&&hint->text_color==0xCBD5E1);assert(contains("Sauna <target>")&&contains("Nazaj"));
  state.phase=PLAYLIST_PENDING;playlist_ui_render(&state,"Pending");assert(contains("Sauna <target>")&&contains("Pending"));
  state.phase=PLAYLIST_ERROR;playlist_ui_render(&state,"Unknown");assert(contains("Sauna <target>"));
  assert(controller_playlist_open(&state,&favorites,"different-zone",10).kind!=PLAYLIST_ACTION_RENDER);
