@@ -1,8 +1,10 @@
 # HiPhi Dial
 
-Custom valve Dial weather and playlist favorites are a local repository candidate. See [operations and exact evidence](docs/operations/playlist-favorites.md); full CI, deployment and physical acceptance remain pending.
+Custom shower Dial release [v1.3.0-shower.3](docs/operations/release-v1.3.0.md) is published and installed; exact CI flash/readback and operator-visible history are recorded in [installation evidence](docs/operations/shower-history.md). Physical acceptance and the documented BLE reconnect limits remain separate.
 
-Paired system release: [v1.1.0 — mobile admin and timed shower settings](docs/releases/v1.1.0.md).
+Companion Pi release: [v1.3.1](https://github.com/danikeuc/rpi-freez-protect/releases/tag/v1.3.1).
+
+Planned extension: [independent light, UniFi webhook and manual reminder](docs/operations/independent-lighting.md). Documentation only; no light control is present in the installed release.
 
 Custom firmware and a companion service that turn a [Waveshare ESP32-S3 Knob](https://www.waveshare.com/esp32-s3-knob-touch-lcd-1.8.htm) into a dedicated hi-fi controller.
 
