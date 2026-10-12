@@ -23,7 +23,8 @@ Show a small bulb with M on every main page while manual override is confirmed.
 On stale/disconnected status, show uncertainty instead of claiming AUTO or OFF.
 The manual timer is owned by the Pi; a local countdown reaching zero only causes
 a state refresh. Default manual return is 60 minutes, configurable in admin.
-Five-minute AUTO hold is a proposal awaiting the owner's duration selection.
+The owner confirmed a default camera hold of five minutes after the last
+distinct accepted detection, configurable in admin. New detections extend it.
 Returning to AUTO clears old holds and requests OFF; fresh input is needed for ON.
 
 ## Integration boundaries
