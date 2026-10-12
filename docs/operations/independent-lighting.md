@@ -52,3 +52,10 @@ Pi 1.3.1 and Dial v1.3.0-shower.3 are already installed. Exact history artifact
 and operator acceptance are recorded in [shower history](shower-history.md).
 That evidence does not validate this new page or the third relay. Published
 release tags and binaries are unchanged by these documents.
+
+## Load clarification - 2026-10-12
+
+The owner reports LED lighting with maximum total power 20 W at 220 V mains.
+This updates the canonical Pi specification; actual driver/contact suitability
+and board revision remain unverified. The clarification changes no UI behavior,
+firmware, relay state or installation.
