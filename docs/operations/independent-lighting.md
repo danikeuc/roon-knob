@@ -32,8 +32,23 @@ Commissioning still requires exact-artifact flash/boot/display/touch/encoder/Wi-
 
 ## GPIO_SHARED_FSEL2_COEXISTENCE — controller activation blocked
 
-Do not enable the candidate Pi GPIO21 executor alongside the current mmap paired daemon. GPIO20/21/26 share FSEL2; the existing paired daemon reads/writes a whole-register configuration snapshot while gpiod21 request/release or kernel cleanup can overlap it. The new fixed-line API does not establish whole-system physical isolation. This known source-level configuration race has no physical acceptance evidence yet.
+**Activation remains blocked with the installed legacy paired mmap daemon.**
+GPIO20/21/26 share FSEL2; the legacy configure path can overwrite a concurrent
+kernel GPIO21 update using its stale register snapshot. The separately
+authorized repair now removes userspace FSEL access from candidate source:
+exclusive kernel reservation/configuration for GPIO26/20 surrounds restricted
+single-mask GPSET0/GPCLR0 writes and readback. See the
+[ownership migration runbook](https://github.com/danikeuc/rpi-freez-protect/blob/codex/independent-lighting-design/docs/operations/paired-gpio-migration.md) for exact profile, interpreter,
+dependency, device mapping, lifecycle and rollback requirements.
 
-Keep the candidate lighting deployment disabled. Do not create `/etc/independent-light/commissioned` or set `LIGHT_GPIO21_ENABLED=commissioned` until separately reviewed architecture eliminates uncoordinated shared-register updates and regression/physical evidence covers startup/restart/request/release/crash behavior, preserving paired atomic output and leases. Initial service ordering or a userspace lock alone cannot cover kernel cleanup; no paired backend rewrite is included. See the [canonical blocker](https://github.com/danikeuc/rpi-freez-protect/blob/codex/independent-lighting-design/docs/superpowers/specs/2026-10-12-independent-lighting-design.md#gpio_shared_fsel2_coexistence). This candidate is source delivery, not installable/enablable while the gate remains open.
+This is a source repair, not an installed migration or physical acceptance.
+Keep lighting templates, flow and gateway disabled. Do not create
+/etc/independent-light/commissioned, set LIGHT_GPIO21_ENABLED=commissioned or
+grant light DeviceAllow until exact installed paired migration plus disconnected
+startup/request/release/crash acceptance is recorded. Kernel-only configuration
+resolves the source FSEL writer race; it does not establish atomic initial
+direction changes, crash protection, physical independence or valve position.
+The current installed Pi/Dial records and all lamp/wiring/Protect gates remain.
+Initial ordering or a userspace lock alone cannot repair the legacy writer.
 
 Browser status and settings reads now fail independently: settings503 preserves fresh status/revision for deliberate AUTO OFF or Back to AUTO, clears confirmed durations/settings revision and gates duration-dependent activation. Config/session fences and the ten-second freshness limit continue to apply.
