@@ -12,7 +12,7 @@ preamble = preamble.replace('(void)time;return false;}', '(void)time;return pick
 preamble += r"""
 #include "controller_input.h"
 static unsigned opened;
-static void valve_ui_toggle_page(void){}
+static void light_ui_next_page(int direction){(void)direction;}
 static void display_art_mode(void){}
 static void display_wake(void){display_state=DISPLAY_STATE_NORMAL;}
 static void display_process_pending(void){}
@@ -38,12 +38,12 @@ int main(void){
    platform_display_process_pending();assert(opened==before+1 && zone && !picker);
    platform_display_process_pending();assert(opened==before+1);zone=false;
   }
-  for(int block=0;block<6;block++){
-   visible=block==0;settings=block==1;zone=block==2;blocked=block==3;
-   display_state=block>=4?block:DISPLAY_STATE_NORMAL;unsigned before=opened;
+  for(int block=0;block<7;block++){
+   visible=block==0;light_visible=block==6;settings=block==1;zone=block==2;blocked=block==3;
+   display_state=block>=4&&block<6?block:DISPLAY_STATE_NORMAL;unsigned before=opened;
    sample(angle,180,60,true,&data);sample(angle,180,180,true,&data);sample(angle,180,180,false,&data);
    platform_display_process_pending();assert(opened==before);
-  }visible=settings=zone=blocked=false;display_state=DISPLAY_STATE_NORMAL;
+  }visible=light_visible=settings=zone=blocked=false;display_state=DISPLAY_STATE_NORMAL;
  }
  puts("production down-swipe opens zones: media/art/playlist, four rotations, modal guards PASS");
 }

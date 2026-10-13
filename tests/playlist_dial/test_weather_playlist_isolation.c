@@ -140,6 +140,10 @@ static display_state_t display_get_state(void){return DISPLAY_STATE_NORMAL;}
 bool admin_settings_input_blocked(void){return false;}
 static bool display_is_touch_suppressed(void){return false;}
 static void display_activity_detected(void){}
+static bool light_ui_visible(void){return false;}
+static void light_ui_cancel_touch(void){}
+static void light_ui_touch(int x,int y,bool p,bool m,uint32_t n){(void)x;(void)y;(void)p;(void)m;(void)n;}
+static void light_ui_next_page(int direction){(void)direction;valve_ui_toggle_page();}
 static bool ui_is_zone_picker_visible(void){return false;}
 static bool ui_is_settings_visible(void){return false;}
 static bool bridge_client_is_ready_for_art_mode(void){return true;}

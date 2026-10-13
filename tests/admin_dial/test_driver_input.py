@@ -42,6 +42,10 @@ static bool display_is_touch_suppressed(void){return false;}
 static void display_activity_detected(void){}
 static bool valve_ui_visible(void){return visible;}
 static void valve_ui_wake(void){}
+static bool light_visible;
+static bool light_ui_visible(void){return light_visible;}
+static void light_ui_cancel_touch(void){}
+static void light_ui_touch(int x,int y,bool down,bool moved,uint32_t now){(void)x;(void)y;(void)down;(void)moved;(void)now;}
 static void valve_ui_cancel_touch(void){cancels++;}
 static bool playlist_ui_visible(void){return false;}
 static void playlist_ui_cancel(void){}

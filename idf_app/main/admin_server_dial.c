@@ -1,6 +1,7 @@
 #include "admin_server_dial.h"
 #include "admin_page_dial.h"
 #include "weather_admin_dial.h"
+#include "light_admin_dial.h"
 #include "playlist_admin_dial.h"
 #include "cJSON.h"
 #include "bridge_client.h"
@@ -564,6 +565,13 @@ static esp_err_t zones_handler(httpd_req_t *req) {
 esp_err_t admin_server_register(httpd_handle_t server) {
     if(!weather_admin_init())return ESP_FAIL;
     const httpd_uri_t routes[] = {
+        {.uri="/admin/api/light/config",.method=HTTP_GET,.handler=light_admin_handler},
+        {.uri="/admin/api/light/config",.method=HTTP_PUT,.handler=light_admin_handler},
+        {.uri="/admin/api/light/status",.method=HTTP_GET,.handler=light_admin_handler},
+        {.uri="/admin/api/light/actions",.method=HTTP_POST,.handler=light_admin_handler},
+        {.uri="/admin/api/light/settings",.method=HTTP_GET,.handler=light_admin_handler},
+        {.uri="/admin/api/light/settings",.method=HTTP_PUT,.handler=light_admin_handler},
+        {.uri="/admin/api/light/history",.method=HTTP_GET,.handler=light_admin_handler},
         {.uri="/admin", .method=HTTP_GET, .handler=shell_handler},
         {.uri="/admin/forms.js", .method=HTTP_GET, .handler=forms_handler},
         {.uri="/admin/api/session", .method=HTTP_GET, .handler=session_handler},

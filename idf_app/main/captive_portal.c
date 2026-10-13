@@ -491,7 +491,7 @@ bool captive_portal_start_locked(void) {
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 31;  // Exact admin routes precede captive wildcard
+    config.max_uri_handlers = 40;  // Exact admin routes precede captive wildcard
     config.stack_size = 8192;  // Increased from default 4096 for NVS + UI operations
     // Note: max_req_hdr_len set via CONFIG_HTTPD_MAX_REQ_HDR_LEN in sdkconfig
 

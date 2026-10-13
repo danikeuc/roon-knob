@@ -25,7 +25,7 @@ else throw Error('Unexpected endpoint '+u.pathname);
 return route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
 });
 await page.goto('http://dial.test/admin');await page.locator('#settings').waitFor({state:'visible'});
-assert.equal(await page.locator('[data-tab]').count(),4,'four navigation tabs');
+assert.equal(await page.locator('[data-tab]').count(),5,'five navigation tabs');
 assert.equal(await page.locator('#forecast .day').count(),5);
 assert.match(await page.locator('#weather-operation').textContent(),/ustavljen|USER_OFF/);
 assert.equal(await page.locator('#pipe-temperature').textContent(),'24,4°');

@@ -1006,7 +1006,7 @@ void config_server_start(void) {
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
-    config.max_uri_handlers = 31;
+    config.max_uri_handlers = 40;
     // The measured config-save path, including HTTP dispatch, uses 8256 bytes
     // before task-wrapper/context overhead. Reserve additional runtime headroom;
     // target stack high-water and device acceptance remain separate checks.

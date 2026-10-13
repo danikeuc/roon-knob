@@ -17,6 +17,8 @@
 #include "wifi_manager.h"
 #include "valve_client_dial.h"
 #include "valve_ui_dial.h"
+#include "light_ui_dial.h"
+#include "light_client_dial.h"
 #include "playlist_client_dial.h"
 #include "playlist_ui_dial.h"
 #include "controller_action_router.h"
@@ -173,6 +175,7 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
         valve_client_on_disconnect();
         playlist_client_connected(false);
         valve_ui_connected(false);
+        light_client_link(false);
         int retry = wifi_mgr_get_retry_count();
         ESP_LOGI(TAG, "WiFi: Connecting... (retry %d)", retry);
         // Only show "Connecting..." on first attempt; during retries, keep showing error/retry
@@ -187,6 +190,7 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
         valve_client_on_reconnect();
         playlist_client_connected(true);
         valve_ui_connected(true);
+        light_client_link(true);
         ESP_LOGI(TAG, "WiFi connected with IP: %s", ip_opt ? ip_opt : "unknown");
         stop_wifi_msg_alternation();
         ui_update("WiFi: Connected", "", false, 0.0f, 0.0f, 100.0f, 1.0f, 0, 0);
@@ -207,6 +211,7 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
         valve_client_on_disconnect();
         playlist_client_connected(false);
         valve_ui_connected(false);
+        light_client_link(false);
         int attempt = wifi_mgr_get_retry_count();
         int max = wifi_mgr_get_retry_max();
         const char *error = ip_opt ? ip_opt : "Connection failed";
@@ -220,6 +225,7 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
         valve_client_on_disconnect();
         playlist_client_connected(false);
         valve_ui_connected(false);
+        light_client_link(false);
         ESP_LOGI(TAG, "WiFi: AP mode started (SSID: hiphi-dial-setup)");
         stop_wifi_msg_alternation();
         // Show setup instructions in main display area (line2 is top, line1 is bottom)
@@ -258,6 +264,7 @@ static void ui_loop_task(void *arg) {
         playlist_ui_process();
         ui_artwork_process();
         valve_ui_process((uint32_t)(esp_timer_get_time() / 1000), !display_is_sleeping());
+        light_ui_process();
 
         // Run LVGL task handler
         ui_loop_iter();
@@ -370,6 +377,7 @@ void app_main(void) {
     ESP_LOGI(TAG, "Initializing UI...");
     ui_init();
     valve_ui_init();
+    light_ui_init();
     if(!playlist_client_init())ESP_LOGW(TAG,"Playlist worker unavailable");
     log_lvgl_memory("after UI initialization");
     log_memory("after UI initialization");

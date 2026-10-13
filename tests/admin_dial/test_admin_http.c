@@ -599,10 +599,13 @@ static void test_weather_route_requires_session(void) {
 static void test_playlist_routes_protected(void) {
  for(int ap=0;ap<2;ap++) {
   fixture_reset();if(ap)assert(captive_portal_start());else config_server_start();
-  assert(route_count<=31);printf("playlist %s routes: %d / 31\n",ap?"AP":"STA",route_count);
-  const char *paths[]={"/admin/api/roon/playlists","/admin/api/roon/favorites"};
-  for(unsigned i=0;i<2;i++){httpd_req_t r=fixture_request(paths[i],HTTP_GET,NULL);fixture_call(&r);assert(fixture_status(&r)==401);}
-  login();httpd_req_t r=fixture_request(paths[1],HTTP_PUT,"{}");r.cookie=cookie;r.csrf="bad";fixture_call(&r);assert(fixture_status(&r)==403);
+  assert(route_count<=40);printf("playlist %s routes: %d / 40\n",ap?"AP":"STA",route_count);
+  const char *paths[]={"/admin/api/roon/playlists","/admin/api/roon/favorites","/admin/api/light/config","/admin/api/light/status","/admin/api/light/settings","/admin/api/light/history"};
+  for(unsigned i=0;i<6;i++){httpd_req_t r=fixture_request(paths[i],HTTP_GET,NULL);fixture_call(&r);assert(fixture_status(&r)==401);}
+  login();
+  const char *light_writes[]={"/admin/api/light/config","/admin/api/light/settings","/admin/api/light/actions"};
+  for(unsigned i=0;i<3;i++){httpd_req_t lr=fixture_request(light_writes[i],i==2?HTTP_POST:HTTP_PUT,"{}");lr.cookie=cookie;lr.csrf="bad";fixture_call(&lr);assert(fixture_status(&lr)==403);}
+  httpd_req_t r=fixture_request(paths[1],HTTP_PUT,"{}");r.cookie=cookie;r.csrf="bad";fixture_call(&r);assert(fixture_status(&r)==403);
   r=fixture_request(paths[1],HTTP_PUT,"{}");r.cookie=cookie;r.csrf=csrf;r.origin="http://evil.test";fixture_call(&r);assert(fixture_status(&r)==403);
   r=fixture_request(paths[0],HTTP_GET,NULL);r.cookie=cookie;r.host="evil.test";fixture_call(&r);assert(fixture_status(&r)==403);
   if(ap)captive_portal_stop();else config_server_stop();

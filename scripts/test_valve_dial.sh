@@ -67,13 +67,13 @@ assert release.index('gesture == VALVE_GESTURE_SWITCH_SCREEN') < release.index('
 assert 'lv_indev_reset(indev, NULL)' in release[:release.index('valve_ui_touch(s_touch_last_x, s_touch_last_y,')]
 pending = touch[touch.index('void platform_display_process_pending(void) {'):]
 assert 'if (s_pending_page_switch)' in pending
-assert pending.index('s_pending_page_switch = false;') < pending.index('valve_ui_toggle_page();')
+assert pending.index('s_pending_page_switch = false;') < pending.index('light_ui_next_page(s_pending_page_direction);')
 assert 'LV_EVENT_CLICKED' not in ui
 assert 'admin_store_load' not in ui and 'admin_store_save' not in ui
 assert 'valve_client_selected_duration_get' in ui
 assert 'data->state = s_touch_consumed ? LV_INDEV_STATE_RELEASED : LV_INDEV_STATE_PRESSED' in touch
 encoder = Path('idf_app/main/platform_input_idf.c').read_text()
-assert encoder.index('if (admin_settings_input_blocked() || valve_ui_visible()) return;') < encoder.index('controller_input_dispatch_physical(&event)')
+assert encoder.index('if (admin_settings_input_blocked() || valve_ui_visible() || light_ui_visible()) return;') < encoder.index('controller_input_dispatch_physical(&event)')
 assert encoder.index('if (display_get_state() != DISPLAY_STATE_NORMAL) valve_ui_wake();') < encoder.index('display_activity_detected();')
 PY
 

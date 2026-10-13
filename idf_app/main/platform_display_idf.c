@@ -2,6 +2,7 @@
 #include "platform/platform_display.h"
 #include "display_sleep.h"
 #include "valve_ui_dial.h"
+#include "light_ui_dial.h"
 #include "playlist_ui_dial.h"
 #include "valve_logic.h"
 #include "display_rotation_dial.h"
@@ -46,6 +47,8 @@ static bool s_touch_wake = false;
 static bool s_touch_started_in_art;
 static int16_t s_touch_last_x, s_touch_last_y;
 static volatile bool s_pending_page_switch = false;
+static bool s_touch_started_on_light = false;
+static int s_pending_page_direction = 1;
 static volatile bool s_pending_art_mode = false;   // Deferred art mode activation
 static volatile bool s_pending_zone_picker = false;  // Deferred zone picker opening
 static bool s_local_rotation_override;
@@ -357,6 +360,7 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
             s_touch_tracking = true;
             s_touch_consumed = false;
             s_touch_started_on_valve = valve_ui_visible();
+            s_touch_started_on_light = light_ui_visible();
             s_touch_started_on_playlist = playlist_ui_visible();
             s_touch_started_in_art = state == DISPLAY_STATE_ART_MODE;
             s_touch_wake = state != DISPLAY_STATE_NORMAL || display_is_touch_suppressed();
@@ -388,15 +392,20 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
             s_touch_started_on_playlist = false;
             s_touch_consumed = true;
             s_pending_page_switch = true;
+        s_pending_page_direction = dx<0?1:-1;
             valve_ui_cancel_touch();
+    light_ui_cancel_touch();
             /* Cancel the active LVGL press before a release can produce CLICKED. */
             lv_indev_reset(indev, NULL);
         }
-        if (!s_touch_started_on_valve && (!s_touch_consumed || playlist_ui_visible()) &&
+        if (!s_touch_started_on_valve && !s_touch_started_on_light && (!s_touch_consumed || playlist_ui_visible()) &&
             playlist_ui_touch(x,y,true,abs(dx)>20||abs(dy)>20,now_ms)) {
             s_touch_consumed=true;data->state=LV_INDEV_STATE_RELEASED;lv_indev_reset(indev,NULL);return;
         }
-        if (s_touch_started_on_valve) {
+        if (s_touch_started_on_light) {
+            light_ui_touch(x,y,!s_touch_consumed,abs(dx)>20||abs(dy)>20,now_ms);
+            data->state=LV_INDEV_STATE_RELEASED;
+        } else if (s_touch_started_on_valve) {
             if (!s_touch_consumed)
                 valve_ui_touch(x, y,
                                true, abs(dx) > 20 || abs(dy) > 20, now_ms);
@@ -415,7 +424,7 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
     uint32_t elapsed = now_ms - (uint32_t)s_touch_start_time;
     int dx = s_touch_last_x - s_touch_start_x;
     int dy = s_touch_last_y - s_touch_start_y;
-    bool playlist_consumed=!s_touch_started_on_valve && !s_touch_wake &&
+    bool playlist_consumed=!s_touch_started_on_valve && !s_touch_started_on_light && !s_touch_wake &&
         playlist_ui_touch(s_touch_last_x,s_touch_last_y,false,abs(dx)>20||abs(dy)>20,now_ms);
     if(playlist_consumed)s_touch_consumed=true;
     valve_gesture_context_t context = {
@@ -428,7 +437,7 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
                                                       0, context);
     /* A downward swipe owns this release, including when a playlist modal
      * consumed the press. Defer opening until outside the LVGL read callback. */
-    if (!s_touch_started_on_valve && gesture == VALVE_GESTURE_ART_DOWN &&
+    if (!s_touch_started_on_valve && !s_touch_started_on_light && gesture == VALVE_GESTURE_ART_DOWN &&
         (!s_touch_wake || s_touch_started_in_art)) {
         playlist_ui_cancel();
         s_touch_consumed = true;
@@ -439,9 +448,13 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
     if (gesture == VALVE_GESTURE_SWITCH_SCREEN && !s_touch_consumed) {
         s_touch_consumed = true;
         s_pending_page_switch = true;
+        s_pending_page_direction = dx<0?1:-1;
         lv_indev_reset(indev, NULL);
     }
-    if (s_touch_started_on_valve) {
+    if (s_touch_started_on_light) {
+        if(!s_touch_consumed&&!s_touch_wake)light_ui_touch(s_touch_last_x,s_touch_last_y,false,abs(dx)>20||abs(dy)>20,now_ms);
+        else light_ui_cancel_touch();
+    } else if (s_touch_started_on_valve) {
         if (!s_touch_consumed && !s_touch_wake)
             valve_ui_touch(s_touch_last_x, s_touch_last_y,
                            false,
@@ -646,7 +659,7 @@ bool platform_display_is_sleeping(void) {
 void platform_display_process_pending(void) {
     if (s_pending_page_switch) {
         s_pending_page_switch = false;
-        valve_ui_toggle_page();
+        light_ui_next_page(s_pending_page_direction);
         s_last_tap_time = 0;
     }
     // Process deferred swipe gesture art mode
@@ -656,7 +669,7 @@ void platform_display_process_pending(void) {
     }
     if (s_pending_zone_picker) {
         s_pending_zone_picker = false;
-        if (!admin_settings_input_blocked() && !valve_ui_visible() &&
+        if (!admin_settings_input_blocked() && !valve_ui_visible() && !light_ui_visible() &&
             !ui_is_zone_picker_visible() && !ui_is_settings_visible()) {
             if (display_get_state() == DISPLAY_STATE_ART_MODE) display_wake();
             const controller_action_t action = {.kind = CONTROLLER_ACTION_OPEN_ZONE_PICKER};
@@ -670,6 +683,7 @@ void platform_display_process_pending(void) {
 void platform_display_cancel_input(void) {
     playlist_ui_cancel();
     valve_ui_cancel_touch();
+    light_ui_cancel_touch();
     if (s_touch_indev) lv_indev_reset(s_touch_indev, NULL);
     s_touch_tracking = false;
     s_touch_consumed = true;

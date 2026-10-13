@@ -310,7 +310,29 @@ jobs:
             test -f "$IDF_PATH/components/mbedtls/mbedtls/library/pkcs5.c";
             sh scripts/test_admin_dial.sh;
             sh scripts/test_valve_dial.sh;
-            sh scripts/test_playlist_dial.sh
+            sh scripts/test_playlist_dial.sh;
+            sh scripts/test_light_dial.sh;
+            python3 scripts/embed_admin_page.py --check
+
+  test-admin-browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install browser test runtime
+        run: |
+          npm install --no-save --package-lock=false playwright@1.62.1
+          npx playwright install --with-deps chromium
+      - name: Verify admin browser behavior
+        run: |
+          node tests/admin_dial/test_admin_browser.cjs
+          node tests/admin_dial/test_admin_redesign.cjs
+          node tests/admin_dial/test_shower_history.cjs
+          node tests/admin_dial/test_light_admin.cjs
 
   build-idf:
     name: build-idf

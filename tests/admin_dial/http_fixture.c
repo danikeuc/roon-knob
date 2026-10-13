@@ -1,3 +1,4 @@
+#include "admin_server_dial.h"
 /* Host-only HTTP transport and hardware/config dependencies. Production handlers
  * are compiled unchanged; counters expose forbidden pre-auth reads/writes. */
 #include "http_fixture.h"
@@ -464,3 +465,5 @@ void ui_hide_zone_picker(void){}
 void platform_display_cancel_input(void){}
 bool controller_input_set_context(controller_interaction_context_t ctx){fixture_context=ctx;return true;}
 controller_interaction_context_t controller_input_get_context(void){return fixture_context;}
+
+esp_err_t light_admin_handler(httpd_req_t *req){(void)admin_http_authorize(req,req->method!=HTTP_GET);return ESP_OK;}
