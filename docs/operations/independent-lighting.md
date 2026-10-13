@@ -1,62 +1,31 @@
-# Planned independent light on the Dial
+# Independent light on the Dial
 
-Date: 2026-10-12. Design-only; no firmware, admin route or hardware change.
+Source implementation: 2026-10-13, branch `codex/independent-lighting-design`. This is committed software, not evidence that the new firmware is installed or the third relay is commissioned. The recorded installed Dial remains `v1.3.0-shower.3` until a separately approved deployment and exact artifact hardware validation.
 
-The owner-approved behavior and Pi/Node-RED protocol constraints live in the
-[canonical Pi lighting specification](https://github.com/danikeuc/rpi-freez-protect/blob/codex/independent-lighting-design/docs/superpowers/specs/2026-10-12-independent-lighting-design.md). Do not duplicate the
-policy in firmware or the Roon/Synology bridge.
+The authoritative policy and Pi/Node-RED contract remain in the [canonical Pi lighting specification](https://github.com/danikeuc/rpi-freez-protect/blob/codex/independent-lighting-design/docs/superpowers/specs/2026-10-12-independent-lighting-design.md). Dial submits intent and displays controller observations; it owns no GPIO or lamp safety policy.
 
-## Screen and state
+## Configure the independent connection
 
-Add a third page Luč alongside Tuš and Roon. In AUTO, a normal tap requests timed
-ON or immediate OFF without changing mode; later fresh camera detections remain
-allowed. Only an explicit manual selection suspends camera control. Manual ON
-and manual OFF both show a warning and the Pi-confirmed time until AUTO.
+Open PIN admin and choose **Luč**. Supply its own base URL, for example `http://pi:8081`, and two distinct 32–512 character ASCII credentials: the light display token for status/actions and the light settings token for settings/history. The Pi/gateway must already expose the exact `/api/v1/lights` API with those roles. These credentials are independent of the shower and camera token. Both are write only, clear from the form after submission/session loss and persist in the independent `light_private` NVS namespace. Changing the URL requires entering both roles again. Blank browser token inputs preserve the existing connection. Saving connection/settings and reading history never activates the light.
 
-Exact localized copy:
+The UI becomes available after configured status advertises `independent_light_v1`. Older/unconfigured Pi installations retain two pages and admin explains unavailable/setup state. There is no shower API fallback. Actual Protect source IDs, field paths and authentication are configured and verified on the Pi ingress; the current status DTO does not claim to inspect that profile.
 
-- **ROČNO — kamera začasno izključena**
-- **AUTO čez 42 min** (example remaining time)
-- **Nazaj na AUTO**
+## Screen and actions
 
-Show a small bulb with M on every main page while manual override is confirmed.
-On stale/disconnected status, show uncertainty instead of claiming AUTO or OFF.
-The manual timer is owned by the Pi; a local countdown reaching zero only causes
-a state refresh. Default manual return is 60 minutes, configurable in admin.
-The owner confirmed a default camera hold of five minutes after the last
-distinct accepted detection, configurable in admin. New detections extend it.
-Returning to AUTO clears old holds and requests OFF; fresh input is needed for ON.
+Horizontal swipes navigate Roon, Tuš and Luč in both directions. AUTO taps request timed ON/OFF while retaining AUTO. Explicit manual controls use the confirmed configured duration; each manual command renews the full override. Manual copy remains **ROČNO — kamera začasno izključena**, **AUTO čez 42 min**, and **Nazaj na AUTO**. A vector bulb and M stay on Roon/Tuš during confirmed manual mode. Offline/local-zero timers retain unknown manual state until fresh Pi status confirms AUTO. GPIO readback describes the output, not lamp illumination.
 
-## Integration boundaries
+Admin includes confirmed mode, controller output, whole minute hold/manual durations (1–120), explicit controls and bounded read-only history. A draft slider value never changes the duration shown on a control until confirmed settings are read. Settings changes affect subsequent intent and do not change an active deadline. Failed settings-role reads retry at most once every fifteen seconds and cannot starve the five-second status poller. OFF and return to AUTO use fresh status without requiring settings availability; manual activation requires a known duration.
 
-The light page must not consume Roon volume/playlist gestures, zone selection,
-shower controls or QGSQ media events. No BLE lighting mapping in the first scope.
-Use separate light credentials and negotiated capability, never a shower action
-as compatibility fallback. Old Pi/unsupported status hides or disables the page.
-Keep network work bounded/off the UI thread, and discard stale/session-invalid
-replies using existing generation fences. Do not optimistically report GPIO or
-physical lamp state before confirmed status.
+## Local intent and reply binding
 
-PIN admin gets hold and manual-return duration, confirmed current mode/deadline,
-webhook setup status and separate light history. Secrets stay server-side; normal
-browser reads and settings changes never send an ON action. Settings affect the
-next activation/override, not an already running deadline.
+Each admin status/settings/history/action request supplies `X-Light-Config-Generation` from its confirmed connection view. This is local Dial metadata and never enters the strict Pi JSON body. Missing/malformed metadata returns422; an obsolete or in-progress generation returns409 without upstream I/O. The captured generation survives HTTP admission, asynchronous handoff, worker submission and final reply. A tab holding controller A's revision cannot submit to newly configured controller B, even when B has the same revision. Config/Wi-Fi/session changes cancel obsolete work; timeouts never automatically retry mutations.
 
-This file carries UI integration requirements only. GPIO21 suitability, fault
-response, webhook shape/authentication, deduplication, reset and persistence are
-owned by the canonical specification. Its missing hardware/runtime facts remain
-unverified. Review the written specification before creating implementation tasks.
+Networking runs on a separate bounded job worker. Admin hands requests off asynchronously so upstream delays do not occupy the main HTTP task. A six-second admin wait cancels retained work safely; late completion cannot publish a result to a expired request. The worker rechecks its five-second deadline before body transmission and each read, with at most two-second socket timeouts. A library DNS stall can occupy that separate worker until DNS returns; it cannot send an expired action afterwards. This does not establish measured hardware timing.
 
-## Recorded baseline
+Roon volume, playlists, zone gestures, shower controls and QGSQ/BLE mappings remain unchanged. No BLE light mapping is included.
 
-Pi 1.3.1 and Dial v1.3.0-shower.3 are already installed. Exact history artifact
-and operator acceptance are recorded in [shower history](shower-history.md).
-That evidence does not validate this new page or the third relay. Published
-release tags and binaries are unchanged by these documents.
+## Verification and installation boundary
 
-## Load clarification - 2026-10-12
+Run `IDF_PATH=<ESP-IDF5.5.5> sh scripts/test_light_dial.sh` for native DTO/config/queue/UI/socket/admin tests. Browser coverage is `node tests/admin_dial/test_light_admin.cjs`, alongside existing admin redesign/history tests; `PLAYWRIGHT_MODULE`, `BROWSER_PATH` and `DIAL_SOURCE` may select the available runtime. `python3 scripts/embed_admin_page.py --check` verifies the generated header. Native/browser suites are wired into CI. Build the existing Waveshare ESP32S3 target with exact ESP-IDF5.5.5; a green build does not validate flashing or physical behavior.
 
-The owner reports LED lighting with maximum total power 20 W at 220 V mains.
-This updates the canonical Pi specification; actual driver/contact suitability
-and board revision remain unverified. The clarification changes no UI behavior,
-firmware, relay state or installation.
+Commissioning still requires exact-artifact flash/boot/display/touch/encoder/Wi-Fi acceptance, isolated relay wiring and observed lamp behavior, boot/crash/power timing, and real authenticated Protect event profile/source IDs. The owner reports LED lighting, maximum20W at220V; contact/driver and board suitability remain unverified. Dial loss cannot extend a controller timer or replay old commands; Pi/executor lease enforcement owns the output. Executor hang and power/reset guarantees remain physical evidence gates. Existing paired GPIO26/20 behavior and published releases remain unchanged.

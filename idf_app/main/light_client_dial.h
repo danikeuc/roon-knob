@@ -20,6 +20,7 @@ typedef struct {int http_status;char body[LIGHT_BODY_MAX+1];size_t length;unsign
 typedef void (*light_callback_t)(const light_reply_t *,void *);
 bool light_client_start(void);
 bool light_client_request(const char *kind,const char *body,unsigned offset,light_callback_t,void *);
+bool light_client_request_guarded_for_config(const char *kind,const char *body,unsigned offset,unsigned generation,light_callback_t,void *,bool (*guard)(void *));
 bool light_client_request_guarded(const char *kind,const char *body,unsigned offset,light_callback_t,void *,bool (*guard)(void *));
 bool light_client_action(light_action_t,uint64_t revision,unsigned generation,light_callback_t,void *);
 void light_client_link(bool connected);

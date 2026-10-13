@@ -8,9 +8,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 static lv_obj_t objects[160],screen,top;
-static unsigned object_count,gen,sess=1,requests,actions;
+static unsigned object_count,gen,sess=1,requests,actions,status_requests,settings_requests;
 static uint64_t now=1000;
 static bool shower;
+static char last_kind[16];
 static light_action_t last_action;
 struct fake_queue {size_t size;bool ready;char data[512];};
 static struct fake_queue queue;
@@ -52,7 +53,7 @@ uint64_t light_client_now(void){return now;}
 bool light_client_start(void){return true;}
 bool valve_ui_visible(void){return shower;}
 void valve_ui_show(bool show){shower=show;}
-bool light_client_request(const char *kind,const char *body,unsigned offset,light_callback_t cb,void *ctx){(void)kind;(void)body;(void)offset;(void)cb;(void)ctx;requests++;return true;}
+bool light_client_request(const char *kind,const char *body,unsigned offset,light_callback_t cb,void *ctx){strcpy(last_kind,kind);if(!strcmp(kind,"status"))status_requests++;if(!strcmp(kind,"settings"))settings_requests++;(void)body;(void)offset;(void)cb;(void)ctx;requests++;return true;}
 bool light_client_action(light_action_t action,uint64_t revision,unsigned generation,light_callback_t cb,void *ctx){(void)revision;(void)generation;(void)cb;(void)ctx;actions++;last_action=action;return true;}
 bool light_settings_parse(const char *b,size_t n,uint64_t *r,unsigned *h,unsigned *m){(void)b;(void)n;(void)r;(void)h;(void)m;return false;}
 bool light_status_parse(const char *body,size_t n,light_status_t *s){(void)body;(void)n;(void)s;return false;}
@@ -64,8 +65,27 @@ int main(void){
  light_ui_init();settings_known=true;settings_at=now;manual_seconds=3600;assert(!light_ui_capable());light_ui_next_page(1);assert(shower&&!light_ui_visible());light_ui_next_page(1);assert(!shower&&!light_ui_visible());
  publish(LIGHT_MANUAL_OFF,1);assert(light_ui_capable());assert(!(badge->flags&LV_OBJ_FLAG_HIDDEN));now+=2000;light_ui_process();assert(!(badge->flags&LV_OBJ_FLAG_HIDDEN));assert(strstr(timer->text,"M"));now+=10000;light_ui_process();assert(!(badge->flags&LV_OBJ_FLAG_HIDDEN));assert(strstr(badge->text,"?"));
  publish(LIGHT_AUTO,0);assert(badge->flags&LV_OBJ_FLAG_HIDDEN);light_ui_next_page(-1);assert(light_ui_visible()&&!shower);light_ui_next_page(-1);assert(shower&&!light_ui_visible());light_ui_next_page(-1);assert(!shower&&!light_ui_visible());light_ui_next_page(1);assert(shower);light_ui_next_page(1);assert(light_ui_visible());light_ui_next_page(1);assert(!shower&&!light_ui_visible());
- light_ui_show(true);pending=false;settings_known=true;settings_at=now;tap(180,145);assert(actions==1&&last_action==LIGHT_ACTION_TIMED_ON);pending=false;publish(LIGHT_AUTO,0);status.desired_on=true;tap(180,145);assert(actions==2&&last_action==LIGHT_ACTION_OFF);
- pending=false;settings_at=now;settings_known=true;publish(LIGHT_MANUAL_ON,60);tap(180,145);assert(actions==3&&last_action==LIGHT_ACTION_MANUAL_OFF);pending=false;publish(LIGHT_MANUAL_OFF,60);tap(180,145);assert(actions==4&&last_action==LIGHT_ACTION_MANUAL_ON);
- pending=false;publish(LIGHT_MANUAL_OFF,60);light_ui_touch(180,145,true,false,now);sess++;light_ui_touch(180,145,false,false,now);assert(actions==4);light_ui_show(false);light_ui_process();assert(!(badge->flags&LV_OBJ_FLAG_HIDDEN));gen+=2;light_ui_process();assert(!light_ui_capable()&&!light_ui_visible());
+ light_ui_show(true);pending=false;settings_known=true;settings_at=now;tap(180,145);assert(actions==1&&last_action==LIGHT_ACTION_TIMED_ON);pending=false;publish(LIGHT_AUTO,0);pending=false;status.desired_on=true;tap(180,145);assert(actions==2&&last_action==LIGHT_ACTION_OFF);
+ pending=false;settings_at=now;settings_known=true;publish(LIGHT_MANUAL_ON,60);pending=false;tap(180,145);assert(actions==3&&last_action==LIGHT_ACTION_MANUAL_OFF);pending=false;publish(LIGHT_MANUAL_OFF,60);pending=false;tap(180,145);assert(actions==4&&last_action==LIGHT_ACTION_MANUAL_ON);
+ pending=false;publish(LIGHT_MANUAL_OFF,60);pending=false;light_ui_touch(180,145,true,false,now);sess++;light_ui_touch(180,145,false,false,now);assert(actions==4);light_ui_show(false);light_ui_process();assert(!(badge->flags&LV_OBJ_FLAG_HIDDEN));gen+=2;light_ui_process();assert(!light_ui_capable()&&!light_ui_visible());
+ pending=false;valid=true;capable=true;settings_known=false;received=now;last_poll=now-6000;last_settings_attempt=0;
+ unsigned before_status=status_requests,before_settings=settings_requests;
+ for(unsigned i=0;i<31;i++) {
+  now+=1000;
+  if(pending) {
+   completion_t response={.generation=gen,.session=sess,.received=now};
+   response.settings=!strcmp(last_kind,"settings");response.ok=!response.settings;
+   if(response.ok){response.status=(light_status_t){.revision=42,.mode=i<20?LIGHT_MANUAL_ON:LIGHT_AUTO,.manual_remaining_seconds=60};strcpy(response.status.health,"OK");}
+   xQueueOverwrite(completions,&response);
+  }
+  light_ui_process();
+ }
+ assert(status_requests-before_status>=5);
+ assert(settings_requests-before_settings<=3&&settings_requests>before_settings);
+ assert(fresh()&&status.mode==LIGHT_AUTO&&(badge->flags&LV_OBJ_FLAG_HIDDEN));
+ last_poll=last_settings_attempt=now;pending=false;publish(LIGHT_MANUAL_ON,60);pending=false;light_ui_show(true);
+ unsigned before_actions=actions;tap(180,330);assert(actions==before_actions+1&&last_action==LIGHT_ACTION_AUTO);
+ pending=false;publish(LIGHT_AUTO,0);pending=false;status.desired_on=true;tap(180,145);assert(actions==before_actions+2&&last_action==LIGHT_ACTION_OFF);
+ pending=false;publish(LIGHT_AUTO,0);pending=false;tap(100,270);assert(actions==before_actions+2); /* Manual ON needs a confirmed duration. */
  puts("production light UI: 3 pages both directions, AUTO tap, explicit manual, offline zero M reminder, config/session touch fences PASS");
 }

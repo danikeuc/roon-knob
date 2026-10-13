@@ -65,7 +65,7 @@ static bool config_write(const char *body,light_config_t *c) {
 typedef struct {
     httpd_req_t *req;
     char session[65],kind[16],body[512];
-    unsigned offset;
+    unsigned offset,generation;
     SemaphoreHandle_t done;
     atomic_bool cancelled;
     atomic_uint refs;
@@ -80,7 +80,7 @@ static void release(admin_job_t *j) {
 }
 static bool guard(void *ctx) {
     admin_job_t *j=ctx;
-    return !atomic_load(&j->cancelled)&&admin_auth_session_valid(j->session,false);
+    return !atomic_load(&j->cancelled)&&j->generation==light_config_generation()&&admin_auth_session_valid(j->session,false);
 }
 static void complete(const light_reply_t *r,void *ctx) {
     admin_job_t *j=ctx;
@@ -91,12 +91,12 @@ static void complete(const light_reply_t *r,void *ctx) {
 }
 static void async_worker(void *ctx) {
     admin_job_t *j=ctx;
-    bool submitted=light_client_request_guarded(j->kind,j->body[0]?j->body:NULL,j->offset,complete,j,guard);
+    bool submitted=light_client_request_guarded_for_config(j->kind,j->body[0]?j->body:NULL,j->offset,j->generation,complete,j,guard);
     if (!submitted)release(j);
     bool done=submitted&&xSemaphoreTake(j->done,pdMS_TO_TICKS(6000))==pdTRUE;
     if (!done)atomic_store(&j->cancelled,true);
     if (admin_http_authorize(j->req,false)) {
-        int code=done?j->result.http_status:503;
+        int code=j->generation!=light_config_generation()?409:done?j->result.http_status:503;
         /* Upstream role credentials are separate from the local PIN session. */
         if(code!=200&&code!=409&&code!=422)code=503;
         reply(j->req,code,code==200?j->result.body:"{\"error\":\"unconfirmed\"}");
@@ -105,6 +105,19 @@ static void async_worker(void *ctx) {
     release(j);
     atomic_flag_clear(&admission);
     vTaskDelete(NULL);
+}
+/* Local header binds the original browser observation to one credential/host
+ * identity. It is never forwarded to the strict upstream JSON API. */
+static bool generation_read(httpd_req_t *req,unsigned *out) {
+    char text[16];
+    if(httpd_req_get_hdr_value_str(req,"X-Light-Config-Generation",text,sizeof text)!=ESP_OK||!text[0])return false;
+    unsigned value=0;
+    for(const char *p=text;*p;p++) {
+        if(*p<'0'||*p>'9'||value>(UINT32_MAX-(unsigned)(*p-'0'))/10)return false;
+        value=value*10+(unsigned)(*p-'0');
+    }
+    *out=value;
+    return true;
 }
 esp_err_t light_admin_handler(httpd_req_t *req) {
     bool write=req->method!=HTTP_GET;
@@ -139,6 +152,9 @@ esp_err_t light_admin_handler(httpd_req_t *req) {
         free(text);
         return e;
     }
+    unsigned intent_generation;
+    if(!generation_read(req,&intent_generation))return reply(req,422,"{\"error\":\"binding_required\"}");
+    if((intent_generation&1)||intent_generation!=light_config_generation())return reply(req,409,"{\"error\":\"configuration_changed\"}");
     if (write&&(!body_read(req,body,512)||!light_write_valid(kind,body,strlen(body))))return reply(req,422,"{\"error\":\"invalid\"}");
     unsigned offset=0;
     if (!strncmp(kind,"history",7)) {
@@ -172,6 +188,7 @@ esp_err_t light_admin_handler(httpd_req_t *req) {
     memcpy(j->session,start+13,64);
     j->session[64]=0;
     j->offset=offset;
+    j->generation=intent_generation;
     strncpy(j->kind,kind,sizeof j->kind-1);
     strcpy(j->body,body);
     j->done=xSemaphoreCreateBinary();

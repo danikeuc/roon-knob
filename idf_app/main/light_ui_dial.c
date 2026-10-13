@@ -16,7 +16,7 @@ static uint64_t received,last_poll;
 static unsigned generation,session;
 static bool capable,visible,pending,valid,settings_known;
 static unsigned hold_seconds,manual_seconds;
-static uint64_t settings_at;
+static uint64_t settings_at,last_settings_attempt;
 static int target=-1;
 static uint64_t touch_revision;
 static unsigned touch_generation,touch_session;
@@ -197,6 +197,7 @@ void light_ui_process(void) {
         light_ui_cancel_touch();
         if (visible) light_ui_show(false);
         last_poll=0;
+        last_settings_attempt=0;
     }
     if (s!=session) {
         session=s;
@@ -204,6 +205,7 @@ void light_ui_process(void) {
         settings_known=false;
         light_ui_cancel_touch();
         last_poll=0;
+        last_settings_attempt=0;
     }
     completion_t c;
     if (completions&&xQueueReceive(completions,&c,0)==pdTRUE) {
@@ -229,13 +231,18 @@ void light_ui_process(void) {
         }
     }
     uint64_t now=light_client_now();
-    if (!pending&&capable&&(!settings_known||now<settings_at||now-settings_at>=15000)) {
-        if (light_client_request("settings",NULL,0,settings_completion,NULL)) pending=true;
-    }
+    /* Status has first opportunity when overdue. Settings failures retry at a
+     * separate bounded cadence and cannot monopolize the worker or controls. */
     if (!pending&&(now<last_poll||now-last_poll>=5000||!last_poll)) {
         if (light_client_request("status",NULL,0,completion,NULL)) {
             pending=true;
             last_poll=now;
+        }
+    } else if (!pending&&capable&&
+               (!last_settings_attempt||now<last_settings_attempt||now-last_settings_attempt>=15000)) {
+        if (light_client_request("settings",NULL,0,settings_completion,NULL)) {
+            pending=true;
+            last_settings_attempt=now;
         }
     }
     render();

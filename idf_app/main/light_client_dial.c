@@ -410,3 +410,7 @@ bool light_client_action(light_action_t action,uint64_t revision,unsigned genera
 bool light_client_request_guarded(const char *kind,const char *body,unsigned offset,light_callback_t cb,void *ctx,bool (*guard)(void *)) {
     return request(kind,body,offset,light_config_generation(),cb,ctx,guard);
 }
+
+bool light_client_request_guarded_for_config(const char *kind,const char *body,unsigned offset,unsigned generation,light_callback_t cb,void *ctx,bool (*guard)(void *)) {
+    return request(kind,body,offset,generation,cb,ctx,guard);
+}
