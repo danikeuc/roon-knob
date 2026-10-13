@@ -97,6 +97,8 @@ static void async_worker(void *ctx) {
     if (!done)atomic_store(&j->cancelled,true);
     if (admin_http_authorize(j->req,false)) {
         int code=done?j->result.http_status:503;
+        /* Upstream role credentials are separate from the local PIN session. */
+        if(code!=200&&code!=409&&code!=422)code=503;
         reply(j->req,code,code==200?j->result.body:"{\"error\":\"unconfirmed\"}");
     }
     httpd_req_async_handler_complete(j->req);
