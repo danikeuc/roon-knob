@@ -1,3 +1,10 @@
+#if defined(ESP_PLATFORM) && defined(RK_DIAL_EXTERNAL_MODELS)
+#include "esp_attr.h"
+#define DIAL_MODEL_STORAGE EXT_RAM_BSS_ATTR
+#else
+#define DIAL_MODEL_STORAGE
+#endif
+
 #include "bridge_client.h"
 
 #include "bridge_command_plan.h"
@@ -133,7 +140,7 @@ struct bridge_state {
     bool net_connected;
 };
 
-static struct bridge_state s_state;
+static DIAL_MODEL_STORAGE struct bridge_state s_state;
 static os_mutex_t s_state_lock = OS_MUTEX_INITIALIZER;
 static atomic_bool s_running = ATOMIC_VAR_INIT(false);
 static atomic_uint s_worker_start_attempts = ATOMIC_VAR_INIT(0);

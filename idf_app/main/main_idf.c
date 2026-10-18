@@ -1,6 +1,7 @@
 #include "app.h"
 #include "battery.h"
 #include "ble_hid_host_dial.h"
+#include "ble_boot_gate.h"
 #include "config_server.h"
 #include "display_sleep.h"
 #include "font_manager.h"
@@ -30,10 +31,12 @@
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <esp_rom_sys.h>
 #include <stdio.h>
 #include <nvs_flash.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/semphr.h>
 #include <stdatomic.h>
 
 static const char *TAG = "main";
@@ -52,11 +55,22 @@ static TaskHandle_t g_ui_task_handle = NULL;
  * a stale STA start request. */
 static atomic_bool s_config_server_start_pending = ATOMIC_VAR_INIT(false);
 static atomic_bool s_config_server_stop_pending = ATOMIC_VAR_INIT(false);
-static volatile bool s_mdns_init_pending = false;
-static volatile bool s_ble_init_pending = false;
+static bool s_mdns_init_pending = false;
+static StaticSemaphore_t s_network_transition_storage;
+static SemaphoreHandle_t s_network_transition_lock;
+static atomic_bool s_ble_init_pending = ATOMIC_VAR_INIT(false);
 static bool s_ble_initialized = false;
+static bool s_ble_boot_attempted;
+static uint64_t s_ble_boot_started_ms;
+static atomic_bool s_network_services_pending = ATOMIC_VAR_INIT(false);
 static void *s_lvgl_psram_pool_memory = NULL;
 static lv_mem_pool_t s_lvgl_psram_pool = NULL;
+
+/* No heap access or allocating logger inside the allocator failure callback. */
+static void allocation_failure_diagnostic(size_t size, uint32_t caps, const char *function) {
+    esp_rom_printf("ALLOC_FAILURE size=%u caps=0x%x function=%s\n",
+                   (unsigned)size, (unsigned)caps, function);
+}
 
 static void log_memory(const char *stage) {
     ESP_LOGI(TAG,
@@ -167,11 +181,15 @@ static void stop_wifi_msg_alternation(void) {
 }
 
 void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
+    xSemaphoreTake(s_network_transition_lock, portMAX_DELAY);
+    // Serialize disconnect fencing against deferred GOT_IP activation.
     // Notify UI about network events (uses lv_async_call internally)
     ui_network_on_event(evt, ip_opt);
 
     switch (evt) {
     case RK_NET_EVT_CONNECTING: {
+        atomic_store(&s_network_services_pending, false);
+        s_mdns_init_pending = false;
         valve_client_on_disconnect();
         playlist_client_connected(false);
         valve_ui_connected(false);
@@ -187,15 +205,12 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
     }
 
     case RK_NET_EVT_GOT_IP:
-        valve_client_on_reconnect();
-        playlist_client_connected(true);
-        valve_ui_connected(true);
-        light_client_link(true);
+        atomic_store(&s_network_services_pending, true);
         ESP_LOGI(TAG, "WiFi connected with IP: %s", ip_opt ? ip_opt : "unknown");
         stop_wifi_msg_alternation();
         ui_update("WiFi: Connected", "", false, 0.0f, 0.0f, 100.0f, 1.0f, 0, 0);
         bridge_client_set_device_ip(ip_opt);  // Store IP for bridge recovery messages
-        bridge_client_set_network_ready(true);
+        // Network clients start after BLE has reserved internal controller RAM.
         // Defer heavy operations to UI task (sys_evt has limited stack)
         s_mdns_init_pending = true;  // mDNS needs network up first
         atomic_store_explicit(&s_config_server_start_pending, true,
@@ -208,6 +223,8 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
     case RK_NET_EVT_WRONG_PASSWORD:
     case RK_NET_EVT_NO_AP_FOUND:
     case RK_NET_EVT_AUTH_TIMEOUT: {
+        atomic_store(&s_network_services_pending, false);
+        s_mdns_init_pending = false;
         valve_client_on_disconnect();
         playlist_client_connected(false);
         valve_ui_connected(false);
@@ -222,6 +239,8 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
     }
 
     case RK_NET_EVT_AP_STARTED:
+        atomic_store(&s_network_services_pending, false);
+        s_mdns_init_pending = false;
         valve_client_on_disconnect();
         playlist_client_connected(false);
         valve_ui_connected(false);
@@ -246,6 +265,7 @@ void rk_net_evt_cb(rk_net_evt_t evt, const char *ip_opt) {
     default:
         break;
     }
+    xSemaphoreGive(s_network_transition_lock);
 }
 
 static void ui_loop_task(void *arg) {
@@ -289,7 +309,7 @@ static void ui_loop_task(void *arg) {
             }
         }
 
-        // Port 80 needs an 8 KiB internal HTTP-server stack. Reserve it before
+        // Port 80 needs a 16 KiB internal HTTP-server stack. Reserve it before
         // mDNS and BLE consume/fragment the remaining internal heap.
         if (atomic_exchange_explicit(&s_config_server_stop_pending, false,
                                      memory_order_acq_rel)) {
@@ -305,20 +325,41 @@ static void ui_loop_task(void *arg) {
         }
 
         // Process remaining deferred operations from the WiFi event callback.
-        if (s_mdns_init_pending) {
-            s_mdns_init_pending = false;
-            ESP_LOGI(TAG, "Initializing mDNS (network is up)...");
-            platform_mdns_init(wifi_mgr_get_hostname());
-        }
-        if (s_ble_init_pending) {
-            s_ble_init_pending = false;
+        if (atomic_exchange(&s_ble_init_pending, false)) {
             if (!s_ble_initialized) {
                 ESP_LOGI(TAG, "Initializing BLE media-remote host...");
                 log_memory("before BLE host init");
+                s_ble_boot_attempted = true;
+                s_ble_boot_started_ms = (uint64_t)(esp_timer_get_time() / 1000);
                 s_ble_initialized = ble_hid_host_dial_start();
                 log_memory(s_ble_initialized ? "after BLE host init" :
                                                 "BLE host init rejected");
             }
+        }
+
+        rk_ble_hid_host_status_t boot_status = {0};
+        bool boot_status_known = s_ble_initialized &&
+            rk_ble_hid_host_status_copy(&boot_status) == RK_BLE_HID_HOST_OK;
+        uint64_t boot_elapsed = (uint64_t)(esp_timer_get_time() / 1000) - s_ble_boot_started_ms;
+        bool boot_ready = s_ble_boot_attempted &&
+            ble_boot_gate_open(s_ble_initialized, boot_status_known,
+                               boot_status.state, boot_elapsed);
+        if (boot_ready) {
+            xSemaphoreTake(s_network_transition_lock, portMAX_DELAY);
+            if (atomic_exchange(&s_network_services_pending, false) && !wifi_mgr_is_ap_mode()) {
+                valve_client_on_reconnect();
+                playlist_client_connected(true);
+                valve_ui_connected(true);
+                light_client_link(true);
+                bridge_client_set_network_ready(true);
+                log_memory("BLE boot gate released network clients");
+            }
+            bool start_mdns = s_mdns_init_pending;
+            s_mdns_init_pending = false;
+            xSemaphoreGive(s_network_transition_lock);
+            // mDNS registers with the default event loop. Never hold our
+            // lifecycle mutex while acquiring the event-loop mutex.
+            if (start_mdns) platform_mdns_init(wifi_mgr_get_hostname());
         }
 
         // Yield to lower priority tasks including IDLE
@@ -327,6 +368,9 @@ static void ui_loop_task(void *arg) {
 }
 
 void app_main(void) {
+    s_network_transition_lock = xSemaphoreCreateMutexStatic(&s_network_transition_storage);
+    configASSERT(s_network_transition_lock);
+    ESP_ERROR_CHECK(heap_caps_register_failed_alloc_callback(allocation_failure_diagnostic));
     ESP_LOGI(TAG, "HiPhi Dial starting...");
 
     // Initialize NVS for configuration storage

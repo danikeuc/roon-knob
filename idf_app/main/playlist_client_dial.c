@@ -1,3 +1,10 @@
+#if defined(ESP_PLATFORM) && defined(RK_DIAL_EXTERNAL_MODELS)
+#include "esp_attr.h"
+#define DIAL_MODEL_STORAGE EXT_RAM_BSS_ATTR
+#else
+#define DIAL_MODEL_STORAGE
+#endif
+
 #include "playlist_client_dial.h"
 #include "playlist_admin_dial.h"
 #include "cJSON.h"
@@ -24,7 +31,7 @@ static atomic_bool online;
 typedef struct { playlist_client_result_t result;playlist_endpoint_t binding; } result_message_t;
 /* Only the UI actor owns the displayed-choice proof. Connectivity invalidates it
  * through the atomic generation; the worker communicates through an RTOS queue. */
-static struct { bool valid;uint32_t generation;playlist_endpoint_t endpoint;playlist_favorites_t favorites; } picker_proof;
+static DIAL_MODEL_STORAGE struct { bool valid;uint32_t generation;playlist_endpoint_t endpoint;playlist_favorites_t favorites; } picker_proof;
 #ifdef PLAYLIST_HOST_TEST
 static result_message_t result_slot;
 static bool has_result;

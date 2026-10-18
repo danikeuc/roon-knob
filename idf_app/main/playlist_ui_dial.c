@@ -1,3 +1,10 @@
+#if defined(ESP_PLATFORM) && defined(RK_DIAL_EXTERNAL_MODELS)
+#include "esp_attr.h"
+#define DIAL_MODEL_STORAGE EXT_RAM_BSS_ATTR
+#else
+#define DIAL_MODEL_STORAGE
+#endif
+
 #include "playlist_ui_dial.h"
 #include "playlist_client_dial.h"
 #include "controller_input.h"
@@ -18,7 +25,7 @@ void platform_display_playlist_transition(void);
 #include "esp_timer.h"
 #include "lvgl.h"
 #endif
-static controller_playlist_t state;
+static DIAL_MODEL_STORAGE controller_playlist_t state;
 static bool shown,loading,candidate,movement,consume_release,new_press,request_accepted;
 static uint64_t press_ms;
 static char message[97];

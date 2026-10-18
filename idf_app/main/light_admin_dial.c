@@ -4,6 +4,8 @@
 #include "admin_server_dial.h"
 #include "admin_auth_dial.h"
 #include "cJSON.h"
+#include "esp_heap_caps.h"
+#include "esp_attr.h"
 #include "valve_logic.h"
 #include <string.h>
 #include <stdlib.h>
@@ -12,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "freertos/queue.h"
 static atomic_flag admission=ATOMIC_FLAG_INIT;
 static esp_err_t reply(httpd_req_t *r,int code,const char *body) {
     const char *status=code==200?"200 OK":code==409?"409 Conflict":code==422?"422 Unprocessable Entity":code==401?"401 Unauthorized":code==403?"403 Forbidden":"503 Service Unavailable";
@@ -89,7 +92,7 @@ static void complete(const light_reply_t *r,void *ctx) {
     xSemaphoreGive(j->done);
     release(j);
 }
-static void async_worker(void *ctx) {
+static void process_job(void *ctx) {
     admin_job_t *j=ctx;
     bool submitted=light_client_request_guarded_for_config(j->kind,j->body[0]?j->body:NULL,j->offset,j->generation,complete,j,guard);
     if (!submitted)release(j);
@@ -104,7 +107,27 @@ static void async_worker(void *ctx) {
     httpd_req_async_handler_complete(j->req);
     release(j);
     atomic_flag_clear(&admission);
-    vTaskDelete(NULL);
+}
+/* Reserve the single admin worker at link time. BLE/Wi-Fi heap pressure must
+ * not require a fresh internal-RAM stack for every authenticated request. */
+static DRAM_ATTR StackType_t worker_stack[4096 / sizeof(StackType_t)] __attribute__((aligned(portBYTE_ALIGNMENT)));
+static DRAM_ATTR StaticTask_t worker_tcb;
+static DRAM_ATTR StaticQueue_t worker_queue_control;
+static DRAM_ATTR uint8_t worker_queue_storage[sizeof(admin_job_t *)];
+static QueueHandle_t worker_queue;
+static TaskHandle_t worker_task;
+static void worker(void *unused) {
+    (void)unused;
+    admin_job_t *job;
+    for (;;)if(xQueueReceive(worker_queue,&job,portMAX_DELAY)==pdTRUE)process_job(job);
+}
+/* Caller holds admission, serializing initialization as well as requests. */
+static bool worker_start(void) {
+    if(worker_task)return true;
+    if(!worker_queue)worker_queue=xQueueCreateStatic(1,sizeof(admin_job_t *),worker_queue_storage,&worker_queue_control);
+    if(!worker_queue)return false;
+    worker_task=xTaskCreateStatic(worker,"light_admin",sizeof worker_stack,NULL,4,worker_stack,&worker_tcb);
+    return worker_task!=NULL;
 }
 /* Local header binds the original browser observation to one credential/host
  * identity. It is never forwarded to the strict upstream JSON API. */
@@ -172,7 +195,13 @@ esp_err_t light_admin_handler(httpd_req_t *req) {
         }
     }
     if (atomic_flag_test_and_set(&admission))return reply(req,503,"{\"error\":\"busy\"}");
-    admin_job_t *j=calloc(1,sizeof *j);
+    if(!worker_start()) {
+        atomic_flag_clear(&admission);
+        return reply(req,503,"{}");
+    }
+    /* The response buffer exceeds 8KB. Keep it out of the internal heap
+     * needed for the short-lived admin task stack and Bluetooth. */
+    admin_job_t *j=heap_caps_calloc(1,sizeof *j,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
     if (!j) {
         atomic_flag_clear(&admission);
         return reply(req,503,"{}");
@@ -204,7 +233,7 @@ esp_err_t light_admin_handler(httpd_req_t *req) {
         atomic_flag_clear(&admission);
         return reply(req,503,"{}");
     }
-    if (xTaskCreate(async_worker,"light_admin",4096,j,4,NULL)!=pdPASS) {
+    if (xQueueSend(worker_queue,&j,0)!=pdTRUE) {
         reply(j->req,503,"{}");
         httpd_req_async_handler_complete(j->req);
         vSemaphoreDelete(j->done);

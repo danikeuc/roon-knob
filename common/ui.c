@@ -1,3 +1,10 @@
+#if defined(ESP_PLATFORM) && defined(RK_DIAL_EXTERNAL_MODELS)
+#include "esp_attr.h"
+#define DIAL_MODEL_STORAGE EXT_RAM_BSS_ATTR
+#else
+#define DIAL_MODEL_STORAGE
+#endif
+
 // HiPhi Dial UI - Clean design based on smart-knob approach
 // Uses LVGL default theme + minimal manual styling
 
@@ -93,7 +100,7 @@ static lv_obj_t *s_zone_list;              // List widget for zone selection
 static bool s_zone_picker_visible = false;
 #define MAX_ZONE_PICKER_ZONES 64
 #define MAX_ZONE_ID_LEN 48
-static char s_zone_picker_ids[MAX_ZONE_PICKER_ZONES][MAX_ZONE_ID_LEN];  // Store zone IDs
+static DIAL_MODEL_STORAGE char s_zone_picker_ids[MAX_ZONE_PICKER_ZONES][MAX_ZONE_ID_LEN];  // Store zone IDs
 static int s_zone_picker_count = 0;
 static int s_zone_picker_selected = 0;     // Currently highlighted item
 static int s_zone_picker_current = -1;     // Currently active zone (no-op if selected)

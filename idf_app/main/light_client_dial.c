@@ -12,6 +12,7 @@
 #include <math.h>
 #if !defined(LIGHT_CLIENT_HOST_TEST) || defined(LIGHT_CLIENT_HTTP_HOST_TEST)
 #include "esp_http_client.h"
+#include "esp_heap_caps.h"
 #endif
 #ifndef LIGHT_CLIENT_HOST_TEST
 #include "esp_timer.h"
@@ -266,13 +267,19 @@ static int network(const char *method,const char *url,const char *token,const ch
     esp_http_client_handle_t h=esp_http_client_init(&cfg);
     if (!h)return 503;
     int result=503;
+    const char *phase="headers";
     char auth[LIGHT_TOKEN_LEN+8];
     snprintf(auth,sizeof auth,"Bearer %s",token);
     size_t size=body?strlen(body):0;
-    if (esp_http_client_set_header(h,"Authorization",auth)!=ESP_OK||esp_http_client_set_header(h,"Content-Type","application/json")!=ESP_OK||!budget(h,j)||esp_http_client_open(h,(int)size)!=ESP_OK)goto done;
+    if (esp_http_client_set_header(h,"Authorization",auth)!=ESP_OK||esp_http_client_set_header(h,"Content-Type","application/json")!=ESP_OK||!budget(h,j))goto done;
+    phase="open";
+    if(esp_http_client_open(h,(int)size)!=ESP_OK)goto done;
+    phase="exchange";
     if (!budget(h,j)||(size&&esp_http_client_write(h,body,(int)size)!=(int)size)||!budget(h,j)||esp_http_client_fetch_headers(h)<0)goto done;
+    phase="response";
     result=esp_http_client_get_status_code(h);
     if (result!=200)goto done;
+    phase="read";
     size_t used=0;
     while (used<cap) {
         if (!budget(h,j)) {
@@ -292,14 +299,26 @@ static int network(const char *method,const char *url,const char *token,const ch
         used+=(size_t)n;
         if (used==cap)result=503;
     }
-    done:memset(auth,0,sizeof auth);
+    done:
+#ifndef LIGHT_CLIENT_HOST_TEST
+    printf("LIGHT_DIAG network kind=%s phase=%s code=%d bytes=%u ms=%llu\n",j->kind,phase,result,(unsigned)*length,(unsigned long long)(light_client_now()-j->at));
+#else
+    (void)phase;
+#endif
+    memset(auth,0,sizeof auth);
     esp_http_client_close(h);
     esp_http_client_cleanup(h);
     return result;
 }
 #endif
 static void perform(job_t *j) {
+    /* The 8 KiB JSON reply is task-only data, never DMA/cache-disabled data.
+     * Preserve internal DMA RAM required by the BLE controller at startup. */
+#if !defined(LIGHT_CLIENT_HOST_TEST) || defined(LIGHT_CLIENT_HTTP_HOST_TEST)
+    light_reply_t *r=heap_caps_calloc(1,sizeof *r,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+#else
     light_reply_t *r=calloc(1,sizeof *r);
+#endif
     if (!r) {
         if (j->callback)j->callback(NULL,j->context);
         atomic_flag_clear(&admission);
@@ -332,12 +351,22 @@ static void perform(job_t *j) {
         uint64_t rev;
         unsigned h,m;
         bool valid=!strcmp(j->kind,"settings")?light_settings_parse(r->body,r->length,&rev,&h,&m):!strcmp(j->kind,"history")?light_history_parse(r->body,r->length,j->offset):light_status_parse(r->body,r->length,&s);
+#ifndef LIGHT_CLIENT_HOST_TEST
+        if(valid&&strcmp(j->kind,"settings")&&strcmp(j->kind,"history"))printf("LIGHT_DIAG state mode=%d health=%s desired=%d gpio=%d reason=%s\n",s.mode,s.health,s.desired_on,s.gpio_on,strspn(s.reason,"abcdefghijklmnopqrstuvwxyz0123456789_")==strlen(s.reason)?s.reason:"invalid_reason");
+#endif
         if (!valid) {
+#ifndef LIGHT_CLIENT_HOST_TEST
+            printf("LIGHT_DIAG parse_rejected kind=%s bytes=%u\n",j->kind,(unsigned)r->length);
+#endif
             r->http_status=503;
             r->length=0;
         }
     }
-    done:memset(&cfg,0,sizeof cfg);
+    done:
+#ifndef LIGHT_CLIENT_HOST_TEST
+    printf("LIGHT_DIAG complete kind=%s code=%d current=%d ms=%llu\n",j->kind,r->http_status,current(j),(unsigned long long)(light_client_now()-j->at));
+#endif
+    memset(&cfg,0,sizeof cfg);
     if (r->http_status!=200) {
         r->length=0;
         r->body[0]=0;
@@ -376,7 +405,13 @@ bool light_client_start(void) {
 }
 #endif
 static bool request(const char *kind,const char *body,unsigned offset,unsigned generation,light_callback_t cb,void *ctx,bool (*guard)(void *)) {
-    if (!kind||(strcmp(kind,"status")&&strcmp(kind,"actions")&&strcmp(kind,"settings")&&strcmp(kind,"history"))||offset>1000000||generation!=light_config_generation()||(generation&1)||!atomic_load(&connected)||(body&&(!light_write_valid(kind,body,strlen(body))||strlen(body)>=512))||atomic_flag_test_and_set(&admission))return false;
+    if (!kind||(strcmp(kind,"status")&&strcmp(kind,"actions")&&strcmp(kind,"settings")&&strcmp(kind,"history"))||offset>1000000||generation!=light_config_generation()||(generation&1)||!atomic_load(&connected)||(body&&(!light_write_valid(kind,body,strlen(body))||strlen(body)>=512)))return false;
+    if(atomic_flag_test_and_set(&admission)) {
+#ifndef LIGHT_CLIENT_HOST_TEST
+        if(guard)printf("LIGHT_DIAG admission_busy kind=%s\n",kind);
+#endif
+        return false;
+    }
     job_t j= {
         .offset=offset,.session=light_client_session(),.generation=generation,.at=light_client_now(),.callback=cb,.context=ctx,.guard=guard
     };

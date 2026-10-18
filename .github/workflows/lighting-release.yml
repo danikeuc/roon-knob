@@ -1,0 +1,440 @@
+name: Lighting release verification
+on:
+  push:
+    tags: ['v1.4.0']
+permissions:
+  contents: read
+jobs:
+  test-shared:
+    name: test-shared
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Test shared configuration contracts
+        run: |
+          python3 scripts/check_dial_identity.py
+          python3 scripts/check_controller_dependencies.py
+          python3 scripts/check_controller_dependencies.py --self-test
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -pthread \
+            -DCONTROLLER_CONFIG_TEST \
+            -Icommon -Iinclude \
+            tests/test_controller_config.c \
+            common/controller_config.c \
+            -o /tmp/test-controller-config
+          /tmp/test-controller-config
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -pthread \
+            -DCONTROLLER_CONFIG_TEST -DTEST_COMPILED_DEFAULTS \
+            '-DCONFIG_RK_DEFAULT_SSID="compiled-ssid"' \
+            '-DCONFIG_RK_DEFAULT_PASS="compiled-pass"' \
+            -Icommon -Iinclude \
+            tests/test_controller_config.c \
+            common/controller_config.c \
+            -o /tmp/test-controller-config-defaults
+          /tmp/test-controller-config-defaults
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -pthread \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -DCONTROLLER_CONFIG_TEST \
+            -Icommon -Iinclude \
+            tests/test_controller_config.c \
+            common/controller_config.c \
+            -o /tmp/test-controller-config-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/test-controller-config-sanitized
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -pthread \
+            -DTEST_DIAL_ADAPTER \
+            -Icommon -Iinclude -Iidf_app/main \
+            tests/test_platform_provisioning_adapter.c \
+            idf_app/main/platform_provisioning_dial.c \
+            idf_app/main/http_server_lifecycle.c \
+            -o /tmp/test-provisioning-adapter-dial
+          /tmp/test-provisioning-adapter-dial
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -DTEST_FRAME_ADAPTER \
+            -Icommon -Iframe_app/main \
+            tests/test_platform_provisioning_adapter.c \
+            frame_app/main/platform_provisioning_frame.c \
+            -o /tmp/test-provisioning-adapter-frame
+          /tmp/test-provisioning-adapter-frame
+          cc -std=c11 -Wall -Wextra -Werror -Icommon tests/test_controller_playlist.c common/controller_playlist.c -o /tmp/test-controller-playlist
+          /tmp/test-controller-playlist
+          sh tests/run_wifi_provisioning_lifecycle.sh
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -pthread \
+            -Icommon -Iinclude \
+            tests/test_controller_input.c \
+            common/controller_input.c \
+            common/platform/platform_task.c \
+            -o /tmp/test-controller-input
+          /tmp/test-controller-input
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -Icommon \
+            tests/test_controller_input_mailbox.c \
+            common/controller_input_mailbox.c \
+            -o /tmp/test-controller-input-mailbox
+          /tmp/test-controller-input-mailbox
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -DTEST_DIAL_PROFILE \
+            -Icommon \
+            tests/test_controller_input_profile.c \
+            idf_app/main/controller_input_profile_dial.c \
+            -o /tmp/test-controller-input-profile-dial
+          /tmp/test-controller-input-profile-dial
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -DTEST_FRAME_PROFILE \
+            -Icommon \
+            tests/test_controller_input_profile.c \
+            frame_app/main/controller_input_profile_frame.c \
+            -o /tmp/test-controller-input-profile-frame
+          /tmp/test-controller-input-profile-frame
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -DTEST_DIAL_PROFILE \
+            -Icommon -Iinclude \
+            tests/test_controller_input_profile_resolution.c \
+            common/controller_input.c \
+            idf_app/main/controller_input_profile_dial.c \
+            -o /tmp/test-controller-input-profile-resolution-dial
+          /tmp/test-controller-input-profile-resolution-dial
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -DTEST_FRAME_PROFILE \
+            -Icommon -Iinclude \
+            tests/test_controller_input_profile_resolution.c \
+            common/controller_input.c \
+            frame_app/main/controller_input_profile_frame.c \
+            -o /tmp/test-controller-input-profile-resolution-frame
+          /tmp/test-controller-input-profile-resolution-frame
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -DCONTROLLER_SYSTEM_FRAME_TEST \
+            -Icommon -Iinclude -Iframe_app/main \
+            tests/test_controller_system_frame.c \
+            common/controller_input.c \
+            common/controller_input_mailbox.c \
+            frame_app/main/controller_input_profile_frame.c \
+            frame_app/main/controller_system_frame.c \
+            -o /tmp/test-controller-system-frame
+          /tmp/test-controller-system-frame
+          cc -std=c11 -Wall -Wextra -Werror \
+            -Icommon -Iinclude \
+            tests/test_controller_presentation_dial.c \
+            idf_app/main/controller_presentation_dial.c \
+            -o /tmp/test-controller-presentation-dial
+          /tmp/test-controller-presentation-dial
+          cc -std=c11 -Wall -Wextra -Werror \
+            -Icommon -Iinclude -Iframe_app/main \
+            tests/test_controller_presentation_frame.c \
+            frame_app/main/controller_presentation_frame.c \
+            -o /tmp/test-controller-presentation-frame
+          /tmp/test-controller-presentation-frame
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -Irlcd_app/main \
+            rlcd_app/tests/rlcd_art_dither_test.c \
+            rlcd_app/main/rlcd_art_dither.c \
+            -o /tmp/test-rlcd-art-dither
+          /tmp/test-rlcd-art-dither
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -Irlcd_app/main \
+            rlcd_app/tests/rlcd_st7305_window_test.c \
+            rlcd_app/main/rlcd_st7305_window.c \
+            -o /tmp/test-rlcd-st7305-window
+          /tmp/test-rlcd-st7305-window
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -Irlcd_app/main \
+            rlcd_app/tests/rlcd_text_test.c \
+            rlcd_app/main/rlcd_text.c \
+            -o /tmp/test-rlcd-text
+          /tmp/test-rlcd-text
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -Icommon \
+            rlcd_app/tests/rlcd_input_profile_test.c \
+            rlcd_app/main/controller_input_profile_rlcd.c \
+            -o /tmp/test-rlcd-input-profile
+          /tmp/test-rlcd-input-profile
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -Icommon \
+            tests/test_controller_values.c \
+            common/controller_view.c \
+            common/controller_view_compat.c \
+            -o /tmp/test-controller-values
+          /tmp/test-controller-values
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -Icommon -Iinclude \
+            tests/test_controller_action_router.c \
+            common/controller_action_router.c \
+            common/controller_input.c \
+            -o /tmp/test-controller-action-router
+          /tmp/test-controller-action-router
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -pthread \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Icommon -Iinclude \
+            tests/test_controller_input.c \
+            common/controller_input.c \
+            common/platform/platform_task.c \
+            -o /tmp/test-controller-input-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/test-controller-input-sanitized
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Icommon \
+            tests/test_controller_input_mailbox.c \
+            common/controller_input_mailbox.c \
+            -o /tmp/test-controller-input-mailbox-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/test-controller-input-mailbox-sanitized
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -DTEST_DIAL_PROFILE \
+            -Icommon \
+            tests/test_controller_input_profile.c \
+            idf_app/main/controller_input_profile_dial.c \
+            -o /tmp/test-controller-input-profile-dial-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/test-controller-input-profile-dial-sanitized
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -DTEST_FRAME_PROFILE \
+            -Icommon \
+            tests/test_controller_input_profile.c \
+            frame_app/main/controller_input_profile_frame.c \
+            -o /tmp/test-controller-input-profile-frame-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/test-controller-input-profile-frame-sanitized
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -DTEST_DIAL_PROFILE \
+            -Icommon -Iinclude \
+            tests/test_controller_input_profile_resolution.c \
+            common/controller_input.c \
+            idf_app/main/controller_input_profile_dial.c \
+            -o /tmp/test-controller-input-profile-resolution-dial-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/test-controller-input-profile-resolution-dial-sanitized
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -DTEST_FRAME_PROFILE \
+            -Icommon -Iinclude \
+            tests/test_controller_input_profile_resolution.c \
+            common/controller_input.c \
+            frame_app/main/controller_input_profile_frame.c \
+            -o /tmp/test-controller-input-profile-resolution-frame-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/test-controller-input-profile-resolution-frame-sanitized
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -DCONTROLLER_SYSTEM_FRAME_TEST \
+            -Icommon -Iinclude -Iframe_app/main \
+            tests/test_controller_system_frame.c \
+            common/controller_input.c \
+            common/controller_input_mailbox.c \
+            frame_app/main/controller_input_profile_frame.c \
+            frame_app/main/controller_system_frame.c \
+            -o /tmp/test-controller-system-frame-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/test-controller-system-frame-sanitized
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Icommon -Iinclude \
+            tests/test_controller_action_router.c \
+            common/controller_action_router.c \
+            common/controller_input.c \
+            -o /tmp/test-controller-action-router-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/test-controller-action-router-sanitized
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -Icommon \
+            tests/test_bridge_command_plan.c \
+            common/bridge_command_plan.c \
+            -o /tmp/test-bridge-command-plan
+          /tmp/test-bridge-command-plan
+          cc -std=c11 -Wall -Wextra -Werror \
+            -Icommon tests/test_rk_cfg.c -o /tmp/test-rk-cfg
+          /tmp/test-rk-cfg
+          cc -std=c11 -Wall -Wextra -Werror \
+            -Icomponents/rk_ble_hid_host/include \
+            tests/test_rk_ble_hid_usage.c \
+            components/rk_ble_hid_host/rk_ble_hid_report.c \
+            -o /tmp/test-rk-ble-hid-usage
+          /tmp/test-rk-ble-hid-usage
+          cc -std=c11 -Wall -Wextra -Werror \
+            -Icomponents/rk_ble_hid_host/include \
+            -Icomponents/rk_ble_hid_host \
+            tests/test_rk_ble_hid_policy.c \
+            components/rk_ble_hid_host/rk_ble_hid_policy.c \
+            -o /tmp/test-rk-ble-hid-policy
+          /tmp/test-rk-ble-hid-policy
+          cc -std=c11 -Wall -Wextra -Werror \
+            -Icomponents/rk_ble_hid_host/include \
+            tests/test_rk_ble_hid_stub.c \
+            components/rk_ble_hid_host/rk_ble_hid_host_stub.c \
+            -o /tmp/test-rk-ble-hid-stub
+          /tmp/test-rk-ble-hid-stub
+
+  test-dial-admin:
+    name: test-dial-admin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Test Dial admin and valve contracts with ESP-IDF 5.5.5
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.5
+          target: esp32s3
+          path: idf_app
+          command: >-
+            set -eu;
+            test "$(idf.py --version)" = "ESP-IDF v5.5.5";
+            cd ..;
+            test -f "$IDF_PATH/components/mbedtls/mbedtls/library/pkcs5.c";
+            sh scripts/test_admin_dial.sh;
+            sh scripts/test_valve_dial.sh;
+            sh scripts/test_playlist_dial.sh;
+            sh scripts/test_light_dial.sh;
+            python3 scripts/embed_admin_page.py --check
+
+  test-admin-browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install browser test runtime
+        run: |
+          npm install --no-save --package-lock=false playwright@1.62.1
+          npx playwright install --with-deps chromium
+      - name: Verify admin browser behavior
+        run: |
+          node tests/admin_dial/test_admin_browser.cjs
+          node tests/admin_dial/test_admin_redesign.cjs
+          node tests/admin_dial/test_shower_history.cjs
+          node tests/admin_dial/test_light_admin.cjs
+          node tests/light_dial/test_admin_poll.cjs
+
+  build-idf:
+    name: build-idf
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Get version from tag or CMakeLists
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+          else
+            VERSION=$(grep 'set(PROJECT_VER' idf_app/CMakeLists.txt | sed 's/.*"\(.*\)".*/\1/')
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building firmware version: $VERSION"
+
+      - name: Inject version into CMakeLists.txt
+        run: |
+          sed -i 's/set(PROJECT_VER ".*")/set(PROJECT_VER "${{ steps.version.outputs.version }}")/' idf_app/CMakeLists.txt
+          grep PROJECT_VER idf_app/CMakeLists.txt
+
+      # Do not cache build/: it contains generated sdkconfig, CMake state, and
+      # firmware that must be regenerated for the checked-out SHA. The IDF image
+      # enables ccache; restoring it by prefix lets source
+      # changes reuse prior object compilation while a distinct SHA key saves the
+      # updated cache after each successful build.
+      - name: Restore ESP-IDF compiler cache
+        uses: actions/cache@v5
+        with:
+          path: .ci/ccache
+          key: ${{ runner.os }}-esp-idf-v5.5.5-ccache-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-esp-idf-v5.5.5-ccache-
+
+      - name: Restore Dial managed components
+        uses: actions/cache@v5
+        with:
+          path: idf_app/managed_components
+          key: ${{ runner.os }}-esp-idf-v5.5.5-dial-components-${{ hashFiles('idf_app/dependencies.lock') }}
+
+      - name: Build with ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.5
+          target: esp32s3
+          path: idf_app
+          extra_docker_args: >-
+            -e CCACHE_DIR=/app/${{ github.repository }}/.ci/ccache
+            -e CCACHE_MAXSIZE=500M
+            -e CCACHE_COMPRESS=1
+          command: >-
+            set -e;
+            ccache --zero-stats;
+            idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.lighting-release" build;
+            grep -Fx "CONFIG_COMPILER_OPTIMIZATION_PERF=y" sdkconfig;
+            ! grep -Fx "CONFIG_COMPILER_OPTIMIZATION_DEBUG=y" sdkconfig;
+            grep -Fx "CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192" sdkconfig;
+            grep -Fx "CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096" sdkconfig;
+            grep -Fx "CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y" sdkconfig;
+            grep -Fx "CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=49152" sdkconfig;
+            grep -Fx "CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y" sdkconfig;
+            grep -Fx "CONFIG_LV_MEM_SIZE_KILOBYTES=8" sdkconfig;
+            grep -Fx "CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=88" sdkconfig;
+            grep -Fx "CONFIG_RK_BLE_HID_HOST=y" sdkconfig;
+            grep -Fx "CONFIG_BT_ENABLED=y" sdkconfig;
+            grep -Fx "CONFIG_BT_NIMBLE_ENABLED=y" sdkconfig;
+            grep -Fx "CONFIG_BT_NIMBLE_NVS_PERSIST=y" sdkconfig;
+            grep -Fx "CONFIG_BT_NIMBLE_SM_SC=y" sdkconfig;
+            grep -Fx "CONFIG_BT_NIMBLE_HID_SERVICE=y" sdkconfig;
+            grep -Fx "CONFIG_BT_NIMBLE_GATT_MAX_PROCS=2" sdkconfig;
+            grep -F "/components/esp_hid/" build/compile_commands.json;
+            grep -F "/generated/nimble_hidh.c" build/compile_commands.json;
+            grep -F "/rk_ble_hid_host.c.obj" build/compile_commands.json;
+            ! grep -F "rk_ble_hid_host_stub.c.obj" build/compile_commands.json;
+            grep -E "^rk_ble_hid_host_init[[:space:]]+esp-idf/rk_ble_hid_host/librk_ble_hid_host[.]a[(]rk_ble_hid_host[.]c[.]obj[)][[:space:]]*$" build/hiphi_dial.map;
+            ! grep -F "rk_ble_hid_host_stub" build/hiphi_dial.map;
+            cp build/hiphi_dial.bin build/roon_knob.bin;
+            cmp build/hiphi_dial.bin build/roon_knob.bin;
+            esptool.py --chip esp32s3 merge_bin
+            -o ../hiphi_dial_merged.bin
+            --flash_mode dio --flash_freq 80m --flash_size 16MB
+            0x0 build/bootloader/bootloader.bin
+            0x8000 build/partition_table/partition-table.bin
+            0xd000 build/ota_data_initial.bin
+            0x10000 build/hiphi_dial.bin;
+            ccache --show-stats
+
+      - name: Verify merged Dial flash image
+        run: |
+          # Compatibility aliases remain byte-identical while bridge/release
+          # consumers migrate to the HiPhi Dial artifact names.
+          cp hiphi_dial_merged.bin roon_knob_merged.bin
+          cmp idf_app/build/hiphi_dial.bin idf_app/build/roon_knob.bin
+          cmp hiphi_dial_merged.bin roon_knob_merged.bin
+          ls -la idf_app/build/hiphi_dial.bin idf_app/build/roon_knob.bin \
+            hiphi_dial_merged.bin roon_knob_merged.bin
+
+      - name: Upload ESP32-S3 artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: esp32s3-firmware
+          path: |
+            idf_app/sdkconfig
+            idf_app/build/hiphi_dial.bin
+            idf_app/build/roon_knob.bin
+            idf_app/build/bootloader/bootloader.bin
+            idf_app/build/partition_table/partition-table.bin
+            idf_app/build/ota_data_initial.bin
+            hiphi_dial_merged.bin
+            roon_knob_merged.bin
+          retention-days: 30

@@ -11,6 +11,9 @@
 #include <math.h>
 #ifndef PLAYLIST_HOST_TEST
 #include "nvs.h"
+#ifdef ESP_PLATFORM
+#include "esp_heap_caps.h"
+#endif
 static const char private_namespace[] = "playlist_priv";
 _Static_assert(sizeof private_namespace <= NVS_NS_NAME_MAX_SIZE, "playlist NVS namespace exceeds IDF limit");
 #endif
@@ -20,7 +23,15 @@ uint32_t playlist_private_generation(void){return atomic_load(&private_generatio
  * recursive cJSON. Escaped key aliases are rejected rather than normalized. */
 void *playlist_json_parse(const char *text,size_t length,size_t maximum) {
  if(!text||!length||length>maximum||memchr(text,0,length))return NULL;
- jsmntok_t *tokens=calloc(768,sizeof *tokens);if(!tokens)return NULL;jsmn_parser p;jsmn_init(&p);
+ /* Tokens are bounded parse data; keep this 12 KiB workspace out of the
+  * internal heap used by BLE and display DMA. No internal fallback. */
+#ifndef ESP_PLATFORM
+ jsmntok_t *tokens=calloc(768,sizeof *tokens);
+#else
+ jsmntok_t *tokens=heap_caps_calloc(768,sizeof *tokens,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+#endif
+ if(!tokens)return NULL;
+ jsmn_parser p;jsmn_init(&p);
  int count=jsmn_parse(&p,text,length,tokens,768);
  if(count<=0||tokens[0].type!=JSMN_OBJECT)goto invalid;
  unsigned depth=0;bool quoted=false,escaped=false;

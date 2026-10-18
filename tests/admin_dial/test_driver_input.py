@@ -80,6 +80,16 @@ int main(void){
   physical(angle,70,150,&x,&y);sample(x,y,true,&data);
   physical(angle,160,150,&x,&y);sample(x,y,true,&data);assert(s_pending_page_switch);
   sample(x,y,false,&data);s_pending_page_switch=false;
+  /* Light page swipes work both directions; its controls never own the gesture. */
+  light_visible=true;
+  for(int direction=-1;direction<=1;direction+=2){
+   physical(angle,180,150,&x,&y);sample(x,y,true,&data);
+   physical(angle,180+direction*90,150,&x,&y);sample(x,y,true,&data);
+   assert(s_pending_page_switch&&s_pending_page_direction==-direction);
+   s_pending_page_switch=false; /* Deferred switch has been consumed. */
+   sample(x,y,false,&data);assert(!s_pending_page_switch);
+  }
+  light_visible=false;
   /* Zone/settings overlays retain their own gesture ownership. */
   for(int mode=0;mode<2;mode++){
    zone=mode==0;settings=mode==1;

@@ -337,7 +337,21 @@ static void lvgl_tick_timer_cb(void *arg) {
 static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
     uint16_t x, y;
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-    if (tpGetCoordinates(&x, &y)) {
+    /* Bounded, non-secret input diagnostics: distinguish polling from a guard
+     * or gesture rejection without issuing any controller action. */
+    static uint32_t diagnostic_at, diagnostic_reads, diagnostic_pressed;
+    diagnostic_reads++;
+    bool physical_pressed=tpGetCoordinates(&x, &y);
+    if (physical_pressed) diagnostic_pressed++;
+    if (light_ui_visible() && now_ms-diagnostic_at>=5000) {
+        printf("LIGHT_TOUCH_DIAG reads=%lu pressed=%lu blocked=%d wait_release=%d tracking=%d consumed=%d display=%d suppressed=%d zones=%d settings=%d\n",
+            (unsigned long)diagnostic_reads,(unsigned long)diagnostic_pressed,
+            admin_settings_input_blocked(),s_touch_until_release,s_touch_tracking,
+            s_touch_consumed,display_get_state(),display_is_touch_suppressed(),
+            ui_is_zone_picker_visible(),ui_is_settings_visible());
+        diagnostic_at=now_ms;diagnostic_reads=diagnostic_pressed=0;
+    }
+    if (physical_pressed) {
         if (admin_settings_input_blocked() || s_touch_until_release) {
             s_touch_until_release = true;
             data->state = LV_INDEV_STATE_RELEASED;
@@ -435,6 +449,10 @@ static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
     };
     valve_gesture_t gesture = valve_gesture_classify(dx, dy, elapsed,
                                                       0, context);
+    if (s_touch_started_on_light) {
+        printf("LIGHT_GESTURE_DIAG dx=%d dy=%d elapsed=%lu gesture=%d consumed=%d wake=%d\n",
+            dx,dy,(unsigned long)elapsed,(int)gesture,s_touch_consumed,s_touch_wake);
+    }
     /* A downward swipe owns this release, including when a playlist modal
      * consumed the press. Defer opening until outside the LVGL read callback. */
     if (!s_touch_started_on_valve && !s_touch_started_on_light && gesture == VALVE_GESTURE_ART_DOWN &&
@@ -659,7 +677,10 @@ bool platform_display_is_sleeping(void) {
 void platform_display_process_pending(void) {
     if (s_pending_page_switch) {
         s_pending_page_switch = false;
+        bool leaving_light=light_ui_visible();
         light_ui_next_page(s_pending_page_direction);
+        printf("PAGE_SWITCH_DIAG direction=%d from_light=%d to_light=%d to_shower=%d\n",
+            s_pending_page_direction,leaving_light,light_ui_visible(),valve_ui_visible());
         s_last_tap_time = 0;
     }
     // Process deferred swipe gesture art mode

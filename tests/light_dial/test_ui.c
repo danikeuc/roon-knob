@@ -9,6 +9,7 @@
 #include <stdio.h>
 static lv_obj_t objects[160],screen,top;
 static unsigned object_count,gen,sess=1,requests,actions,status_requests,settings_requests;
+static unsigned label_updates;
 static uint64_t now=1000;
 static bool shower;
 static char last_kind[16];
@@ -39,7 +40,7 @@ void lv_obj_add_flag(lv_obj_t *o, unsigned f) { o->flags |= f; }
 void lv_obj_clear_flag(lv_obj_t *o, unsigned f) { o->flags &= ~f; }
 void lv_obj_align(lv_obj_t *o, int a, int x, int y) {(void)o;(void)a;(void)x;(void)y;}
 void lv_obj_set_pos(lv_obj_t *o, int x, int y) {o->x = x; o->y = y;}
-void lv_label_set_text(lv_obj_t *o, const char *s) { snprintf(o->text, sizeof o->text, "%s", s); }
+void lv_label_set_text(lv_obj_t *o, const char *s) { label_updates++; snprintf(o->text, sizeof o->text, "%s", s); }
 void lv_obj_move_foreground(lv_obj_t *o) { (void)o; }
 void lv_obj_add_state(lv_obj_t *o, unsigned s) { o->state |= s; }
 void lv_obj_clear_state(lv_obj_t *o, unsigned s) { o->state &= ~s; }
@@ -62,8 +63,8 @@ bool light_status_fresh(const light_status_t *s,uint64_t received,uint64_t curre
 static void publish(light_mode_t mode,unsigned seconds){completion_t c={.ok=true,.generation=gen,.session=sess,.received=now,.status={.revision=42,.mode=mode,.manual_remaining_seconds=seconds}};strcpy(c.status.health,"OK");xQueueOverwrite(completions,&c);light_ui_process();}
 static void tap(int x,int y){light_ui_touch(x,y,true,false,(uint32_t)now);light_ui_touch(x,y,false,false,(uint32_t)now);}
 int main(void){
- light_ui_init();settings_known=true;settings_at=now;manual_seconds=3600;assert(!light_ui_capable());light_ui_next_page(1);assert(shower&&!light_ui_visible());light_ui_next_page(1);assert(!shower&&!light_ui_visible());
- publish(LIGHT_MANUAL_OFF,1);assert(light_ui_capable());assert(!(badge->flags&LV_OBJ_FLAG_HIDDEN));now+=2000;light_ui_process();assert(!(badge->flags&LV_OBJ_FLAG_HIDDEN));assert(strstr(timer->text,"M"));now+=10000;light_ui_process();assert(!(badge->flags&LV_OBJ_FLAG_HIDDEN));assert(strstr(badge->text,"?"));
+ light_ui_init();assert(state->text_font==font_manager_get_small());assert(timer->text_font==font_manager_get_small());assert(manual_off_label->text_font==font_manager_get_small());settings_known=true;settings_at=now;manual_seconds=3600;assert(!light_ui_capable());light_ui_next_page(1);assert(shower&&!light_ui_visible());light_ui_next_page(1);assert(!shower&&!light_ui_visible());
+ publish(LIGHT_MANUAL_OFF,1);assert(light_ui_capable());assert(!(badge->flags&LV_OBJ_FLAG_HIDDEN));now+=2000;light_ui_process();assert(!(badge->flags&LV_OBJ_FLAG_HIDDEN));assert(strstr(timer->text,"Čakam"));now+=10000;light_ui_process();assert(!(badge->flags&LV_OBJ_FLAG_HIDDEN));assert(strstr(badge->text,"?"));
  publish(LIGHT_AUTO,0);assert(badge->flags&LV_OBJ_FLAG_HIDDEN);light_ui_next_page(-1);assert(light_ui_visible()&&!shower);light_ui_next_page(-1);assert(shower&&!light_ui_visible());light_ui_next_page(-1);assert(!shower&&!light_ui_visible());light_ui_next_page(1);assert(shower);light_ui_next_page(1);assert(light_ui_visible());light_ui_next_page(1);assert(!shower&&!light_ui_visible());
  light_ui_show(true);pending=false;settings_known=true;settings_at=now;tap(180,145);assert(actions==1&&last_action==LIGHT_ACTION_TIMED_ON);pending=false;publish(LIGHT_AUTO,0);pending=false;status.desired_on=true;tap(180,145);assert(actions==2&&last_action==LIGHT_ACTION_OFF);
  pending=false;settings_at=now;settings_known=true;publish(LIGHT_MANUAL_ON,60);pending=false;tap(180,145);assert(actions==3&&last_action==LIGHT_ACTION_MANUAL_OFF);pending=false;publish(LIGHT_MANUAL_OFF,60);pending=false;tap(180,145);assert(actions==4&&last_action==LIGHT_ACTION_MANUAL_ON);
@@ -84,8 +85,48 @@ int main(void){
  assert(settings_requests-before_settings<=3&&settings_requests>before_settings);
  assert(fresh()&&status.mode==LIGHT_AUTO&&(badge->flags&LV_OBJ_FLAG_HIDDEN));
  last_poll=last_settings_attempt=now;pending=false;publish(LIGHT_MANUAL_ON,60);pending=false;light_ui_show(true);
- unsigned before_actions=actions;tap(180,330);assert(actions==before_actions+1&&last_action==LIGHT_ACTION_AUTO);
+ unsigned before_actions=actions;tap(236,279);assert(actions==before_actions+1&&last_action==LIGHT_ACTION_AUTO);
  pending=false;publish(LIGHT_AUTO,0);pending=false;status.desired_on=true;tap(180,145);assert(actions==before_actions+2&&last_action==LIGHT_ACTION_OFF);
- pending=false;publish(LIGHT_AUTO,0);pending=false;tap(100,270);assert(actions==before_actions+2); /* Manual ON needs a confirmed duration. */
+ pending=false;publish(LIGHT_AUTO,0);pending=false;tap(236,279);tap(124,279);assert(actions==before_actions+2); /* Manual ON needs a confirmed duration. */
+ options=false;pending=false;settings_known=true;settings_at=now;publish(LIGHT_MANUAL_ON,60);pending=false;
+ unsigned before_warning_tap=actions;tap(230,245);assert(actions==before_warning_tap);
+ /* Confirmed camera/output status drives the icon independently of local taps. */
+ pending=false;settings_known=true;settings_at=now;hold_seconds=300;publish(LIGHT_AUTO,0);pending=false;
+ assert(strstr(state->text,"AUTO")&&strstr(state->text,"5 min"));
+ status.gpio_on=1;status.desired_on=false;status.remaining_seconds=240;render();
+ assert(!strcmp(power_state->text,"VKLOPLJENA")&&!(main_icon.rays[0]->flags&LV_OBJ_FLAG_HIDDEN));
+ status.gpio_on=0;status.desired_on=true;render();
+ assert(!strcmp(power_state->text,"IZKLOPLJENA")&&(main_icon.rays[0]->flags&LV_OBJ_FLAG_HIDDEN));
+ status.gpio_on=-1;render();assert(strcmp(power_state->text,"IZKLOPLJENA")&&strcmp(power_state->text,"VKLOPLJENA"));
+ status.gpio_on=1;now+=LIGHT_STALE_MS;render();
+ assert(strcmp(power_state->text,"VKLOPLJENA")&&(main_icon.rays[0]->flags&LV_OBJ_FLAG_HIDDEN));
+
+ pending=false;publish(LIGHT_AUTO,0);pending=false;settings_known=true;settings_at=now;render();
+ unsigned n=actions;tap(236,279);assert(actions==n);
+ tap(124,279);assert(actions==n+1&&last_action==LIGHT_ACTION_MANUAL_ON);
+ pending=false;publish(LIGHT_MANUAL_OFF,899);pending=false;
+ strcpy(status.reason,"manual_cooldown");render();
+ assert(strstr(state->text,"PREMOR")&&strstr(timer->text,"AUTO"));
+ /* An ON countdown must not invalidate the full-screen ring every UI tick. */
+ pending=false;publish(LIGHT_AUTO,0);pending=false;settings_known=true;hold_seconds=300;
+ status.gpio_on=1;status.remaining_seconds=240;received=now;render();
+ unsigned ring_updates=ring->line_updates, labels_before=label_updates;
+ for(unsigned tick=0;tick<40;tick++){now+=10;render();}
+ assert(ring->line_updates==ring_updates);
+ assert(label_updates==labels_before); /* Unchanged ticks must not invalidate labels. */
+ now+=5000;render();assert(ring->line_updates==ring_updates+1);
+ assert(label_updates>labels_before&&strstr(timer->text,"3:55"));
+ /* Changes within the same second must still render immediately. */
+ options=true;render();assert(!strcmp(manual_on_label->text,"Ročni ON"));
+ options=false;render();assert(!strcmp(manual_on_label->text,"Izklopi"));
+ hold_seconds=600;render();assert(strstr(state->text,"10 min"));
+ settings_known=false;render();assert(strstr(state->text,"— min"));
+ strcpy(status.health,"FAULT");render();assert(!strcmp(power_state->text,"NAPAKA LUČI"));
+ strcpy(status.health,"OK");render();assert(!strcmp(power_state->text,"VKLOPLJENA"));
+ /* Navigation must preserve an active light and issue no actuator request. */
+ unsigned actions_before_swipe=actions;
+ light_ui_show(true);light_ui_next_page(1);assert(!light_ui_visible()&&!shower);
+ light_ui_show(true);light_ui_next_page(-1);assert(!light_ui_visible()&&shower);
+ assert(status.gpio_on==1&&actions==actions_before_swipe);
  puts("production light UI: 3 pages both directions, AUTO tap, explicit manual, offline zero M reminder, config/session touch fences PASS");
 }

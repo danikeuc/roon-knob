@@ -247,6 +247,9 @@ static valve_client_result_t request(const char *method, const char *route,
                            sizeof response, &response_len, (void *)deadline);
 #endif
     if(deadline && (monotonic_ms()<deadline->origin_ms || monotonic_ms()>=deadline->expires_ms))return VALVE_CLIENT_TIMEOUT;
+#ifndef VALVE_CLIENT_HOST_TEST
+    printf("VALVE_DIAG response read=%d rc=%d http=%d bytes=%u\n",!strcmp(method,"GET"),rc,http_status,(unsigned)response_len);
+#endif
     if (rc == -2 || response_len > sizeof response) return VALVE_CLIENT_INVALID;
     if (rc == -3) return VALVE_CLIENT_TIMEOUT;
     if (rc != 0) return VALVE_CLIENT_UNAVAILABLE;
@@ -263,6 +266,9 @@ static valve_client_result_t request(const char *method, const char *route,
             if (!valve_action_response_parse(response,response_len,id,out)) return VALVE_CLIENT_INVALID;
         } else if (!valve_status_parse(response,response_len,out)) return VALVE_CLIENT_INVALID;
     }
+#ifndef VALVE_CLIENT_HOST_TEST
+    if(parse_status)printf("VALVE_DIAG parsed state=%d operation=%d reason=%s\n",out->state,out->operation,strspn(out->reason,"abcdefghijklmnopqrstuvwxyz0123456789_")==strlen(out->reason)?out->reason:"invalid_reason");
+#endif
     return VALVE_CLIENT_OK;
 }
 static void action_uuid(char out[37]) {

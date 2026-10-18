@@ -12,7 +12,7 @@ static inline const lv_font_t *fake_font_montserrat_14(void) {
 #define lv_font_montserrat_14 (*fake_font_montserrat_14())
 #define lv_font_montserrat_20 (*fake_font_montserrat_20())
 typedef struct lv_obj {
-    unsigned flags, state;
+    unsigned flags, state, line_updates;
     char text[96];
     struct lv_obj *parent;
     int x, y;
@@ -55,7 +55,7 @@ static inline void lv_obj_set_style_text_color(lv_obj_t *obj, int color, int sel
 }
 typedef struct { int x,y; } lv_point_precise_t;
 static inline lv_obj_t *lv_line_create(lv_obj_t *p) { return lv_obj_create(p); }
-static inline void lv_line_set_points(lv_obj_t *o,const lv_point_precise_t *p,uint32_t n) {(void)o;(void)p;(void)n;}
+static inline void lv_line_set_points(lv_obj_t *o,const lv_point_precise_t *p,uint32_t n) {o->line_updates++;(void)p;(void)n;}
 static inline void lv_obj_set_style_line_color(lv_obj_t *o,int v,int s) {(void)o;(void)v;(void)s;}
 static inline void lv_obj_set_style_line_width(lv_obj_t *o,int v,int s) {(void)o;(void)v;(void)s;}
 static inline void lv_obj_set_style_line_rounded(lv_obj_t *o,int v,int s) {(void)o;(void)v;(void)s;}

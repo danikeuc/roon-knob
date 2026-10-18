@@ -9,3 +9,5 @@ static inline void lv_obj_remove_flag(lv_obj_t *o,unsigned f){lv_obj_clear_flag(
 static inline void lv_obj_set_width(lv_obj_t *o,int n){(void)o;(void)n;}
 static inline void lv_obj_set_style_text_align(lv_obj_t *o,int a,int b){(void)o;(void)a;(void)b;}
 static inline void lv_obj_set_style_opa(lv_obj_t *o,int a,int b){(void)o;(void)a;(void)b;}
+
+typedef int lv_color_t;

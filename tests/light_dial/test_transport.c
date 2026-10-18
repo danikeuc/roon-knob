@@ -2,6 +2,10 @@
 #include "light_config_dial.h"
 #include "esp_http_client.h"
 #include <assert.h>
+#include <stdlib.h>
+#include "esp_heap_caps.h"
+static unsigned reply_allocations; static bool allocation_fails;
+void *heap_caps_calloc(size_t n,size_t size,unsigned caps){assert(n==1&&size==sizeof(light_reply_t));assert(caps==(MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));reply_allocations++;return allocation_fails?NULL:calloc(n,size);}
 #include <stdio.h>
 #include <string.h>
 static light_config_t stored={.url="http://pi:8081",.display="dddddddddddddddddddddddddddddddd",.settings="ssssssssssssssssssssssssssssssss"};
@@ -19,5 +23,5 @@ int esp_http_client_read(esp_http_client_handle_t h,char *b,int n){(void)h;(void
 bool esp_http_client_is_complete_data_received(esp_http_client_handle_t h){(void)h;return true;}
 esp_err_t esp_http_client_close(esp_http_client_handle_t h){(void)h;return 0;}
 esp_err_t esp_http_client_cleanup(esp_http_client_handle_t h){(void)h;cleanups++;return 0;}
-static void complete(const light_reply_t *r,void *ctx){(void)ctx;callbacks++;code=r->http_status;}
-int main(void){light_client_link(true);light_client_test_clock(1000);assert(light_client_action(LIGHT_ACTION_MANUAL_ON,1,0,complete,NULL));light_client_test_run();assert(opened==1&&writes==0&&cleanups==1&&callbacks==1&&code==503);light_client_test_run();assert(opened==1);puts("production light socket: Bearer, redirect refusal, total deadline recheck before action body, one exchange/no retry PASS");}
+static void complete(const light_reply_t *r,void *ctx){(void)ctx;callbacks++;code=r?r->http_status:0;}
+int main(void){light_client_link(true);light_client_test_clock(1000);assert(light_client_action(LIGHT_ACTION_MANUAL_ON,1,0,complete,NULL));light_client_test_run();assert(opened==1&&writes==0&&cleanups==1&&callbacks==1&&code==503);light_client_test_run();assert(opened==1&&reply_allocations==1);allocation_fails=true;assert(light_client_action(LIGHT_ACTION_OFF,1,0,complete,NULL));light_client_test_run();assert(callbacks==2&&code==0&&opened==1&&reply_allocations==2);allocation_fails=false;assert(light_client_action(LIGHT_ACTION_OFF,1,0,complete,NULL));puts("production light socket: Bearer, redirect refusal, total deadline recheck before action body, one exchange/no retry PASS");}

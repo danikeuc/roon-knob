@@ -52,3 +52,7 @@ The current installed Pi/Dial records and all lamp/wiring/Protect gates remain.
 Initial ordering or a userspace lock alone cannot repair the legacy writer.
 
 Browser status and settings reads now fail independently: settings503 preserves fresh status/revision for deliberate AUTO OFF or Back to AUTO, clears confirmed durations/settings revision and gates duration-dependent activation. Config/session fences and the ten-second freshness limit continue to apply.
+
+## Current release status — 2026-10-18
+
+The earlier source-only activation block above is historical. Owner receipts now record the paired migration, independent-light runtime and G4 Pro forwarding installation; see Pi docs/PROJECT_STATE.md and docs/releases/v1.4.0.md for current scope and limits. Manual ON expiry includes a 900-second camera cooldown before AUTO. The light page uses confirmed GPIO state for its icon and owner-tested change-driven rendering for smooth swipes. Release-candidate hardware validation is tracked separately in release-v1.4.0.md.
