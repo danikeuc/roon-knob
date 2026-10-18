@@ -3,20 +3,40 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>HiPhi Beta firmware</title>
-  <meta name="description" content="HiPhi Beta release availability.">
-  <link rel="icon" href="../alpha/assets/favicon.ico">
-  <link rel="stylesheet" href="../alpha/assets/styles.css">
+  <title>Flash HiPhi firmware</title>
+  <meta name="description" content="Flash HiPhi firmware for supported controller hardware.">
+  <link rel="stylesheet" href="./assets/styles-74fe7d8796d875d33c0781b3e1462bc9903fe381.css">
+  <script defer src="./assets/site-74fe7d8796d875d33c0781b3e1462bc9903fe381.js"></script>
   <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
 </head>
-<body class="flash-shell" data-target-filter="all" data-channel="beta">
+<body class="flash-shell" data-target-filter="all">
   <a class="skip-link" href="#main">Skip to content</a>
   <header class="site-header"><div class="container nav-wrap">
     <a class="brand" href="https://hiphi.audio/"><strong>HiPhi</strong><span>by Open Horizon Labs</span></a>
-    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav"><span>Menu</span><span class="nav-face" aria-hidden="true">••</span></button>
-    <nav class="site-nav" id="site-nav" aria-label="Firmware channels"><a data-channel-link="stable" href="/stable/">Stable</a><a data-channel-link="beta" href="/beta/">Beta</a><a data-channel-link="alpha" href="/alpha/">Alpha</a><a class="nav-flash" href="/">All channels</a></nav>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav"><span>Menu</span><span class="nav-face" aria-hidden="true">··</span></button>
+    <nav class="site-nav" id="primary-nav" aria-label="Primary"><a href="https://hiphi.audio/controllers.html">Controllers</a><a href="https://hiphi.audio/getting-started.html">Get started</a><a href="https://hiphi.audio/mcp.html">UHC + MCP</a><a class="nav-flash" aria-current="page" href="/flash.html">Flash firmware</a></nav>
   </div></header>
-
   <main class="flash-main" id="main"><div class="container">
     <a class="flash-breadcrumb" href="/">← Firmware center</a>
-    <div class="flash-intro"><div><p class="context-line">Beta</p><h1>No Beta release yet.</h1></div><p>Use <a href="/stable/">Stable 2.5.2</a> for HiPhi Dial, or <a href="/alpha/">Alpha 2.7</a> to test the latest firmware.</p></div></div></main><script src="../alpha/assets/site.js" defer></script></body></html>
+    <div class="flash-intro"><div><p class="context-line">Firmware center</p><h1>Match the model before flashing.</h1></div><p>Flash over USB from desktop Chrome or Edge. Stable is the release for daily listening.</p></div>
+    <div class="warning"><strong>Pre-release firmware</strong><br>Beta and Alpha builds are opt-in test builds. They are not delivered by automatic OTA updates; return here to install a newer test build.</div>
+    <div class="unsupported" id="unsupported"><strong>This browser cannot flash over USB.</strong> Open this page in desktop Chrome or Edge.</div>
+    <div class="callout"><p><strong>Install Unified Hi-Fi Control first.</strong> HiPhi controllers talk to UHC on your network — <a href="https://hiphi.audio/getting-started.html">install it first</a>, or the controller has nothing to connect to.</p></div>
+    <div class="flash-list">
+      <article class="flash-card" id="dial-card"><div><span class="version">Step 1 / ESP32-S3</span><h2>Dial</h2><p class="hardware">Waveshare ESP32-S3-Knob-Touch-LCD-1.8</p><p>The round touchscreen controller with rotary input, Wi-Fi playback control, and optional BLE media-remote support.</p><p class="risk">Updates keep Wi-Fi and controller settings when you decline the browser erase prompt.</p><details><summary><strong>Dial install steps</strong></summary><ol><li>Turn on the device with the power slider toward USB-C.</li><li>Connect a data-capable USB-C cable.</li><li>Flash only when the browser identifies the ESP32-S3.</li></ol></details></div><div class="flash-action"><esp-web-install-button manifest="./manifest-s3.json"><button slot="activate">Flash HiPhi Dial</button></esp-web-install-button><span class="download-link">USB / Web Serial</span></div></article>
+      <article class="flash-card" id="frame-card"><div><span class="version">Alpha / ESP32-S3 e-ink</span><h2>Frame</h2><p>The rectangular e-ink now-playing display with physical buttons and BLE media-remote support.</p><p class="risk">Exact hardware only. Frame is an early target; expect rough edges.</p></div><div class="flash-action"><esp-web-install-button manifest="./manifest-frame.json"><button slot="activate">Flash HiPhi Frame</button></esp-web-install-button><span class="download-link">USB / Web Serial</span></div></article>
+      <article class="flash-card" id="rlcd-card"><div><span class="version">Alpha / ESP32-S3 reflective LCD</span><h2>Slate</h2><p>A dedicated now-playing controller for the Waveshare ESP32-S3-RLCD-4.2.</p><p class="risk">Exact hardware only. RLCD support remains an early target.</p></div><div class="flash-action"><esp-web-install-button manifest="./manifest-rlcd.json"><button slot="activate">Flash HiPhi Slate</button></esp-web-install-button><span class="download-link">USB / Web Serial</span></div></article>
+    </div>
+    <div class="requirements"><h2>Before connecting USB</h2><ul><li>Use desktop Chrome or Edge with Web Serial.</li><li>Use a data-capable USB cable.</li><li>Verify the exact board and revision.</li><li>Decline erase during updates to retain settings.</li></ul></div>
+  </div></main>
+  <script>
+    const targetFilter = document.body.dataset.targetFilter;
+    const targetNames = {dial: 'HiPhi Dial', frame: 'HiPhi Frame', rlcd: 'HiPhi Slate'};
+    if (targetNames[targetFilter]) {
+      document.querySelectorAll('.flash-card').forEach(card => { if (card.id !== `${targetFilter}-card`) card.remove(); });
+      document.querySelector('h1').textContent = `Flash ${targetNames[targetFilter]}`;
+    }
+    if (!('serial' in navigator)) document.getElementById('unsupported').style.display = 'block';
+  </script>
+</body>
+</html>
