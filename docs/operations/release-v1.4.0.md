@@ -1,4 +1,4 @@
-# v1.4.0 — Independent light and smooth navigation
+# v1.4.0-sauna.1 — Independent light and smooth navigation
 
 Companion to Pi v1.4.0, published only on the owner fork danikeuc/roon-knob.
 
