@@ -247,7 +247,7 @@ static const char ADMIN_FORMS_JS[] =
 "document.addEventListener('submit',async event=>{\n"
 " const form=event.target;if(!(form instanceof HTMLFormElement)||form.method.toUpperCase()!=='POST')return;\n"
 " event.preventDefault();if(form.dataset.busy)return;\n"
-" const action=new URL(form.action,location.href);if(action.origin!==location.origin)return;\n"
+" const action=new URL(form.getAttribute('action'),location.href);if(action.origin!==location.origin)return;\n"
 " const data=new URLSearchParams(new FormData(form));if(event.submitter?.name)data.append(event.submitter.name,event.submitter.value);\n"
 " form.dataset.busy='1';const buttons=[...form.querySelectorAll('button,input[type=submit]')];buttons.forEach(b=>b.disabled=true);\n"
 " try{\n"

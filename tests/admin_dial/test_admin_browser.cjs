@@ -189,6 +189,7 @@ function embedded(name) {
   if(path==='/admin/forms.js')return route.fulfill({contentType:'application/javascript',body:embedded('ADMIN_FORMS_JS')});
   if(path==='/admin/api/session')return route.fulfill({contentType:'application/json',body:JSON.stringify({authenticated:!sessionExpired,csrf:'c'.repeat(64)})});
   if(request.method()==='POST'){
+   assert.equal(path,'/valves-config','legacy form must use its declared action URL');
    legacyPost={body:request.postData(),csrf:request.headers()['x-csrf-token']};
    return route.fulfill({contentType:'text/html',body:'<p id="saved">Shranjeno</p>'});
   }

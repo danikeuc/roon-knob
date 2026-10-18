@@ -330,6 +330,7 @@ jobs:
       - name: Verify admin browser behavior
         run: |
           node tests/admin_dial/test_admin_browser.cjs
+          node tests/admin_dial/test_form_routes.cjs
           node tests/admin_dial/test_admin_redesign.cjs
           node tests/admin_dial/test_shower_history.cjs
           node tests/admin_dial/test_light_admin.cjs
