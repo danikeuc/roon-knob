@@ -12,8 +12,10 @@ import argparse
 import copy
 import fnmatch
 import json
+import os
 import re
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -169,13 +171,15 @@ def parse_cmake_sources(cmake_path: Path) -> list[Path]:
 
 def project_file_index(root: Path = ROOT) -> dict[str, list[Path]]:
     index: dict[str, list[Path]] = {}
-    ignored_parts = {".git", "build", "managed_components"}
-    for candidate in root.rglob("*"):
-        if not candidate.is_file():
-            continue
-        if ignored_parts.intersection(candidate.relative_to(root).parts):
-            continue
-        index.setdefault(candidate.name, []).append(candidate.resolve())
+    ignored_parts = {".git", "build", "managed_components", "tests"}
+    for directory, subdirectories, filenames in os.walk(root):
+        subdirectories[:] = [
+            name for name in subdirectories if name not in ignored_parts
+        ]
+        for filename in filenames:
+            candidate = Path(directory) / filename
+            if candidate.is_file():
+                index.setdefault(filename, []).append(candidate.resolve())
     return index
 
 
@@ -237,12 +241,30 @@ def collect_edges(
                     f"the enforced contract: {macro_includes[0]}"
                 )
             for include in ANGLE_INCLUDE_RE.findall(source_text):
+                if "tests" not in source.relative_to(root).parts:
+                    resolved_angle = resolve_header(
+                        include, source, include_dirs, index
+                    )
+                    if "tests" in Path(include).parts or (
+                        resolved_angle is not None
+                        and "tests" in resolved_angle.relative_to(root).parts
+                    ):
+                        raise ValueError(
+                            f"{relative_path(source, root)}: production source cannot "
+                            f"include test fixture: {include}"
+                        )
                 if Path(include).name in index:
                     raise ValueError(
                         f"{relative_path(source, root)}: repository-local angle "
                         f"include is outside the enforced contract: {include}"
                     )
             for include in INCLUDE_RE.findall(source_text):
+                production_source = "tests" not in source.relative_to(root).parts
+                if production_source and "tests" in Path(include).parts:
+                    raise ValueError(
+                        f"{relative_path(source, root)}: production source cannot "
+                        f"include test fixture: {include}"
+                    )
                 resolved = resolve_header(include, source, include_dirs, index)
                 if resolved is None:
                     if Path(include).name in index:
@@ -251,6 +273,11 @@ def collect_edges(
                             f"unreachable repository include: {include}"
                         )
                     continue
+                if production_source and "tests" in resolved.relative_to(root).parts:
+                    raise ValueError(
+                        f"{relative_path(source, root)}: production source cannot "
+                        f"include test fixture: {include}"
+                    )
                 if resolved.suffix in PROJECT_INCLUDE_SUFFIXES and resolved not in visited:
                     pending.append(resolved)
                 header = relative_path(resolved, root)
@@ -452,6 +479,94 @@ def run_negative_fixture(policy: dict) -> None:
     print("controller dependency negative fixture passed")
 
 
+def run_header_index_fixture() -> None:
+    """Host fake names are not production headers; direct test imports fail."""
+    with tempfile.TemporaryDirectory(
+        prefix=".ci-policy-fixture-", dir=ROOT
+    ) as directory:
+        fixture_root = Path(directory)
+        source = fixture_root / "common" / "controller.c"
+        source.parent.mkdir(parents=True)
+        cmake = fixture_root / "idf_app" / "main" / "CMakeLists.txt"
+        cmake.parent.mkdir(parents=True)
+        cmake.write_text(
+            'set(SRC_FILES\n  "../../common/controller.c"\n)\n'
+            'idf_component_register(\n  SRCS ${SRC_FILES} INCLUDE_DIRS "."\n)\n',
+            encoding="utf-8",
+        )
+        fake = fixture_root / "tests" / "fakes" / "freertos" / "FreeRTOS.h"
+        fake.parent.mkdir(parents=True)
+        fake.write_text("#pragma once\n", encoding="utf-8")
+        policy = {
+            "targets": {
+                "dial": {
+                    "cmake": relative_path(cmake),
+                    "include_dirs": [
+                        relative_path(source.parent),
+                        relative_path(cmake.parent),
+                    ],
+                }
+            }
+        }
+
+        source.write_text('#include "freertos/FreeRTOS.h"\n', encoding="utf-8")
+        if collect_edges(policy):
+            raise AssertionError("host fake header became a production edge")
+
+        source.write_text(
+            '#include "../tests/fakes/freertos/FreeRTOS.h"\n',
+            encoding="utf-8",
+        )
+        try:
+            collect_edges(policy)
+        except ValueError as error:
+            if "production source cannot include test fixture" not in str(error):
+                raise
+        else:
+            raise AssertionError("production source imported a test fixture")
+
+        source.write_text(
+            '#include <../tests/fakes/freertos/FreeRTOS.h>\n',
+            encoding="utf-8",
+        )
+        try:
+            collect_edges(policy)
+        except ValueError as error:
+            if "production source cannot include test fixture" not in str(error):
+                raise
+        else:
+            raise AssertionError("production angle include imported a test fixture")
+
+        policy["targets"]["dial"]["include_dirs"].append(
+            relative_path(fake.parent)
+        )
+        source.write_text('#include <FreeRTOS.h>\n', encoding="utf-8")
+        try:
+            collect_edges(policy)
+        except ValueError as error:
+            if "production source cannot include test fixture" not in str(error):
+                raise
+        else:
+            raise AssertionError("resolved angle include imported a test fixture")
+        policy["targets"]["dial"]["include_dirs"].pop()
+
+        production_header = fixture_root / "shared" / "owner.h"
+        production_header.parent.mkdir(parents=True)
+        production_header.write_text("#pragma once\n", encoding="utf-8")
+        source.write_text('#include "owner.h"\n', encoding="utf-8")
+        try:
+            collect_edges(policy)
+        except ValueError as error:
+            if (
+                "unresolved or unreachable repository include: owner.h"
+                not in str(error)
+            ):
+                raise
+        else:
+            raise AssertionError("unreachable production header was accepted")
+    print("controller dependency header-index fixture passed")
+
+
 def load_policy(path: Path) -> dict:
     with path.open(encoding="utf-8") as handle:
         return json.load(handle)
@@ -466,6 +581,8 @@ def main() -> int:
 
     try:
         policy = load_policy(args.policy)
+        if args.self_test:
+            run_header_index_fixture()
         observed = collect_edges(policy)
         if args.dump:
             print_edges(observed)

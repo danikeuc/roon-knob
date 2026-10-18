@@ -47,7 +47,7 @@
   and part of LVGL's object heap.
 - QSPI DMA draw buffers and cache-sensitive task stacks remain in internal
   SRAM; free PSRAM cannot satisfy those allocations.
-- Dial uses a 24 KiB internal + 72 KiB PSRAM split LVGL object heap. See
+- Dial uses a 8 KiB internal + 88 KiB PSRAM split LVGL object heap. See
   [ESP32-S3 Memory Architecture](../MEMORY.md) for the allocation policy and
   measured failure history.
 

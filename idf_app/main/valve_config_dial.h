@@ -13,6 +13,8 @@
 uint32_t valve_config_generation(void);
 bool valve_config_load(char *base_url, size_t url_len, char *token, size_t token_len);
 bool valve_config_save(const char *base_url, const char *token);
+bool valve_config_save_weather(const char *base_url,const char *display_token,const char *weather_token);
+bool valve_config_weather_load(char *base_url,size_t url_len,char *token,size_t token_len);
 bool valve_config_clear(void);
 
 #endif

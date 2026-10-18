@@ -3,6 +3,20 @@ set(SRC_FILES
     "captive_portal.c"
     "config_server.c"
     "valve_config_dial.c"
+    "light_config_dial.c"
+    "light_client_dial.c"
+    "light_ui_dial.c"
+    "light_admin_dial.c"
+    "weather_admin_dial.c"
+    "playlist_admin_dial.c"
+    "playlist_client_dial.c"
+    "playlist_ui_dial.c"
+    "admin_store_dial.c"
+    "admin_auth_dial.c"
+    "admin_server_dial.c"
+    "admin_settings_dial.c"
+    "admin_backend_dial.c"
+    "admin_crypto_dial.c"
     "valve_logic.c"
     "valve_client_dial.c"
     "valve_ui_dial.c"
@@ -11,6 +25,7 @@ set(SRC_FILES
     "ui_network.c"
     "platform_display_idf.c"
     "display_sleep.c"
+    "display_rotation_dial.c"
     "platform_storage_idf.c"
     "platform_http_idf.c"
     "platform_mdns_idf.c"
@@ -40,6 +55,7 @@ set(SRC_FILES
     "../../common/controller_config.c"
     "../../common/controller_ble_input.c"
     "../../common/controller_input.c"
+    "../../common/controller_playlist.c"
     "../../common/controller_input_mailbox.c"
     "../../common/controller_view.c"
     "../../common/controller_view_compat.c"
@@ -73,6 +89,7 @@ idf_component_register(
         i2c_bsp
         lcd_touch_bsp
     PRIV_REQUIRES
+        mbedtls
         nvs_flash
         esp_http_client
         esp_http_server
@@ -87,6 +104,6 @@ idf_component_register(
 
 set_property(TARGET ${COMPONENT_LIB} PROPERTY C_STANDARD 11)
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE TARGET_PC=0 RK_CUSTOM_VALVE_FIRMWARE=1)
+target_compile_definitions(${COMPONENT_LIB} PRIVATE TARGET_PC=0 RK_CUSTOM_VALVE_FIRMWARE=1 RK_DIAL_EXTERNAL_MODELS=1)
 # TODO(#183): Remove after ESP-IDF 6.0 migration (Picolibc has proper strlcpy)
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error=stringop-truncation)

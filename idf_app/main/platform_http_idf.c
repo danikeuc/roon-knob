@@ -1,6 +1,7 @@
 #include "platform/platform_http.h"
 
 #include <esp_http_client.h>
+#include <esp_timer.h>
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_mac.h>
@@ -406,3 +407,29 @@ int platform_http_get_image(const char *url, char **out, size_t *out_len) {
     if (out_len) *out_len = final_size;
     return 0;
 }
+
+#if defined(RK_CUSTOM_VALVE_FIRMWARE) && RK_CUSTOM_VALVE_FIRMWARE
+#define PLAYLIST_ARTWORK_BYTES 259200U
+int platform_http_get_dial_artwork(const char *url,char **out,size_t *length,bool (*current)(void *),void *context) {
+    if(!url||!out||!length||!current)return -1;
+    *out=NULL;*length=0;
+    uint64_t start=(uint64_t)(esp_timer_get_time()/1000);
+    if(start>UINT64_MAX-5000)return -1;
+    uint64_t deadline=start+5000;
+    esp_http_client_config_t config={.url=url,.method=HTTP_METHOD_GET,.timeout_ms=3000,.disable_auto_redirect=true};
+    esp_http_client_handle_t client=esp_http_client_init(&config);if(!client)return -1;
+    char *pixels=NULL;int result=-1;
+#define ART_BUDGET() do { uint64_t now=(uint64_t)(esp_timer_get_time()/1000);if(!current(context)||now<start||now>=deadline||esp_http_client_set_timeout_ms(client,(int)((deadline-now)<3000?(deadline-now):3000))!=ESP_OK)goto done; } while(0)
+    if(esp_http_client_set_header(client,"Accept-Encoding","identity")!=ESP_OK)goto done;
+    ART_BUDGET();if(esp_http_client_open(client,0)!=ESP_OK)goto done;
+    ART_BUDGET();int content_length=esp_http_client_fetch_headers(client);
+    if(esp_http_client_get_status_code(client)!=200||content_length>(int)PLAYLIST_ARTWORK_BYTES)goto done;
+    ART_BUDGET();pixels=heap_caps_malloc(PLAYLIST_ARTWORK_BYTES,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);if(!pixels)goto done;
+    size_t used=0;
+    while(used<PLAYLIST_ARTWORK_BYTES){ART_BUDGET();int n=esp_http_client_read(client,pixels+used,(int)(PLAYLIST_ARTWORK_BYTES-used));if(n<=0)goto done;used+=(size_t)n;}
+    ART_BUDGET();char excess;if(esp_http_client_read(client,&excess,1)!=0||!esp_http_client_is_complete_data_received(client))goto done;
+    ART_BUDGET();*out=pixels;pixels=NULL;*length=used;result=0;
+done:free(pixels);esp_http_client_close(client);esp_http_client_cleanup(client);return result;
+#undef ART_BUDGET
+}
+#endif

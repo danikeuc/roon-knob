@@ -15,6 +15,12 @@ static const controller_input_descriptor_t s_descriptors[] = {
 };
 
 static const controller_input_binding_t s_bindings[] = {
+#if defined(RK_CUSTOM_VALVE_FIRMWARE) && RK_CUSTOM_VALVE_FIRMWARE
+    {.source_id=CONTROLLER_INPUT_SOURCE_DIAL_BUILTIN,.control_id=CONTROLLER_INPUT_CONTROL_DIAL_ROTATION,
+     .event_kind=CONTROLLER_PHYSICAL_EVENT_ROTATION,.gesture=CONTROLLER_PHYSICAL_GESTURE_NONE,
+     .context=CONTROLLER_INTERACTION_CONTEXT_PLAYLIST_PICKER,.transform=CONTROLLER_INPUT_TRANSFORM_ROTATION_DIRECTION,
+     .action={.kind=CONTROLLER_ACTION_SCROLL_PLAYLIST_PICKER,.value.picker_delta=1}},
+#endif
     {
         .source_id = CONTROLLER_INPUT_SOURCE_DIAL_BUILTIN,
         .control_id = CONTROLLER_INPUT_CONTROL_DIAL_ROTATION,

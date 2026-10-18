@@ -1,5 +1,11 @@
 # HiPhi Dial
 
+Custom shower Dial release [v1.3.0-shower.3](docs/operations/release-v1.3.0.md) is published and installed; exact CI flash/readback and operator-visible history are recorded in [installation evidence](docs/operations/shower-history.md). Physical acceptance and the documented BLE reconnect limits remain separate.
+
+Companion Pi release: [v1.3.1](https://github.com/danikeuc/rpi-freez-protect/releases/tag/v1.3.1).
+
+Planned extension: [independent light, UniFi webhook and manual reminder](docs/operations/independent-lighting.md). Documentation only; no light control is present in the installed release.
+
 Custom firmware and a companion service that turn a [Waveshare ESP32-S3 Knob](https://www.waveshare.com/esp32-s3-knob-touch-lcd-1.8.htm) into a dedicated hi-fi controller.
 
 See what's playing, adjust volume, skip tracks, and switch zones—all from a physical knob on your desk.
@@ -132,3 +138,13 @@ For commercial licensing inquiries, see [COMMERCIAL-LICENSE.md](COMMERCIAL-LICEN
 ## Acknowledgments
 
 Thanks to **gTunes** from the Roon community for alpha testing, detailed feedback, and help with the velocity-sensitive volume control implementation.
+
+## Independent lighting in the custom Dial firmware
+
+The Waveshare ESP32-S3 custom build supports a third **Luč** page after a configured controller returns the `independent_light_v1` capability. Horizontal swipes navigate Roon, Tuš and Luč in both directions; an older or unconfigured Pi retains the two existing pages. Light actions use only `/api/v1/lights`, independent of shower and Roon credentials. The separate light worker polls with bounded requests and never automatically retries an action. Config, Wi-Fi and admin session fences cancel expired or obsolete work before it sends a body and discard late replies.
+
+PIN admin includes a **Luč** section for the separate base URL and distinct display/settings tokens, confirmed status, timed ON/OFF in AUTO, explicit manual ON/OFF and return to AUTO, whole minute durations (1–120), and history. Tokens are write only, stored together in the independent `light_private` NVS namespace, and never returned to the browser. Saving configuration/durations and reading history do not energize the light. Blank browser token inputs preserve the current connection; a new URL requires both credentials again. These credentials must be provisioned on the separate Pi controller/gateway first.
+
+Manual mode displays **ROČNO — kamera začasno izključena**, a countdown and **Nazaj na AUTO**. A small vector bulb and M remain on Roon and Tuš during manual mode; offline or elapsed local timers show unknown until a fresh controller response confirms AUTO. Every manual action renews the full configured override duration. GPIO readback describes the controller output, not lamp illumination.
+
+Software verification: `IDF_PATH=<ESP-IDF-5.5.5> sh scripts/test_light_dial.sh`, the existing admin/valve/playlist/weather suites, browser tests in `tests/admin_dial`, and the exact Waveshare ESP32-S3 build. Physical flashing, lamp/wiring behavior, power/reset timing and the authenticated real Protect event profile remain commissioning gates. Dial communication loss/crash/reboot/power loss cannot extend a server deadline or replay a queued action; the Pi controller/executor owns OFF and lease enforcement. Executor hang, boot and power behavior require hardware evidence. The light never owns or changes shower GPIO26/20.
