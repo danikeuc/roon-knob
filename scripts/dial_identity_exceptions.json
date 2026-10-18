@@ -122,7 +122,8 @@
         ".github/RELEASE_TEMPLATE.md",
         "docs/usage/FIRMWARE_FLASHING.md",
         "docs/usage/GETTING_STARTED.md",
-        "docs/usage/OTA_UPDATES.md"
+        "docs/usage/OTA_UPDATES.md",
+        ".github/workflows/lighting-release.yml"
       ],
       "tokens": [
         "roon_knob"
@@ -168,6 +169,20 @@
         "roon-knob"
       ],
       "line_regex": "^roon-knob/"
+    },
+    {
+      "id": "owner-sauna-release-provenance",
+      "category": "historical-provenance",
+      "owner": "danikeuc/roon-knob#15",
+      "retirement": "Retain while these release records identify the owner fork and its immutable artifacts.",
+      "path_globs": [
+        "docs/operations/release-v1.3.0.md",
+        "docs/operations/release-v1.4.0.md"
+      ],
+      "tokens": [
+        "roon-knob"
+      ],
+      "line_regex": "danikeuc/roon-knob"
     }
   ],
   "required": [

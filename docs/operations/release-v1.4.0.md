@@ -1,4 +1,4 @@
-# v1.4.0-sauna.1 — Independent light and smooth navigation
+# v1.4.0-sauna.2 — Independent light and smooth navigation
 
 Companion to Pi v1.4.0, published only on the owner fork danikeuc/roon-knob.
 
@@ -12,3 +12,5 @@ Release verification builds only the Waveshare ESP32-S3 Dial using ESP-IDF 5.5.5
 App-only updates use 0x10000 on the verified 16 MB partition layout. Preserve NVS and credentials; do not flash a merged/factory image over a configured device. Lamp/valve physical acceptance and controller historical fault limitations are documented in Pi v1.4.0. No general BLE reconnect guarantee is claimed.
 
 See docs/esp/light-swipe-20261018.md for measured input evidence and prior installation receipts.
+
+Candidate tag v1.4.0-sauna.1 was not published: identity inventory omitted the copied compatibility aliases and owner release provenance URLs. Candidate .2 classifies only those exact workflow/doc paths; runtime source is unchanged apart from the version.

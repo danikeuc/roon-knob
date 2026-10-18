@@ -1,7 +1,7 @@
 name: Lighting release verification
 on:
   push:
-    tags: ['v1.4.0-sauna.1']
+    tags: ['v1.4.0-sauna.2']
 permissions:
   contents: read
 jobs:
