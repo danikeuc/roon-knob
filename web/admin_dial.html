@@ -66,14 +66,29 @@ function zonesConfirmed(value){
  if(target){select.value=target.id;$('roon-zone-status').textContent='Predvajanje: '+target.name;}else{select.selectedIndex=-1;$('roon-zone-status').textContent='Trenutno območje ni dosegljivo v Roon. Izberi drugo območje spodaj.'}zoneControls();
 }
 async function reloadZones(){const epoch=zoneEpoch;const value=await api('roon/zones');if(epoch===zoneEpoch&&csrf)zonesConfirmed(value)}
-async function refreshZones(){if(zoneBusy||!csrf)return;zoneBusy=true;zoneEpoch++;playlistUnavailable();zoneControls();try{await reloadZones();if(currentZoneLive)await reloadPlaylists()}catch(e){if(e.status!==401){zonesUnavailable();$('roon-zone-status').textContent='Branje območij ni potrjeno. '+e.message}}finally{zoneBusy=false;zoneControls();playlistControls()}}
+async function refreshZones(){
+ if(zoneBusy||!csrf)return;zoneBusy=true;zoneEpoch++;playlistUnavailable();zoneControls();
+ try{
+  try{await reloadZones()}catch(e){if(e.status!==401){zonesUnavailable();$('roon-zone-status').textContent='Branje območij ni potrjeno. '+e.message}}
+  if(currentZoneLive&&csrf)try{await reloadPlaylists()}catch(e){if(e.status!==401)playlistUnavailable()}
+ }finally{zoneBusy=false;zoneControls();playlistControls()}
+}
 $('roon-zone-refresh').onclick=refreshZones;
 $('roon-zone-save').onclick=async()=>{
  if(zoneBusy||!csrf||currentZone===null)return;const target=$('roon-zone').value,expected=currentZone;if(!target||target===expected)return;
  zoneBusy=true;zoneEpoch++;playlistUnavailable();zoneControls();
- try{const value=await api('roon/zone',{zone_id:target,expected_current_zone_id:expected},'PUT');if(!csrf)return;zonesConfirmed(value);if(currentZone!==target)throw new Error('Območje se je med spremembo zamenjalo.');await reloadPlaylists()}
- catch(e){if(e.status!==401){try{await reloadZones();await reloadPlaylists()}catch(readError){zonesUnavailable()}$('roon-zone-status').textContent='Izbira ni potrjena. Preveri ponovno prebrano območje. '+e.message}}
- finally{zoneBusy=false;zoneControls();playlistControls()}
+ try{
+  try{
+   const value=await api('roon/zone',{zone_id:target,expected_current_zone_id:expected},'PUT');
+   if(!csrf)return;zonesConfirmed(value);if(currentZone!==target)throw new Error('Območje se je med spremembo zamenjalo.');
+  }catch(e){
+   if(e.status!==401){
+    try{await reloadZones()}catch(readError){zonesUnavailable()}
+    if(currentZone!==target||!currentZoneLive)$('roon-zone-status').textContent='Izbira ni potrjena. Preveri ponovno prebrano območje. '+e.message;
+   }
+  }
+  if(currentZoneLive&&csrf)try{await reloadPlaylists()}catch(e){if(e.status!==401)playlistUnavailable()}
+ }finally{zoneBusy=false;zoneControls();playlistControls()}
 };
 let playlistRevision=null,playlistCore=null,playlistCatalogRevision=null,playlistCursor=null,playlistDraft=[],playlistPage=[],playlistBusy=false,playlistEpoch=0,playlistNeedsRefresh=false;
 function playlistControls(){
