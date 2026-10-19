@@ -435,6 +435,20 @@ static esp_err_t weather_handler(httpd_req_t *req) {
     if(!(write?weather_settings_view_json(&output,body,sizeof body):weather_admin_view_json(&output,body,sizeof body)))return reply(req,"503 Service Unavailable","{\"error\":\"unavailable\"}");
     return reply(req,"200 OK",body);
 }
+static const char *playlist_failure_body(int status) {
+    switch (status) {
+    case PLAYLIST_ADMIN_ADMISSION: return "{\"error\":\"unconfirmed\",\"stage\":\"admission\"}";
+    case PLAYLIST_ADMIN_CREDENTIAL: return "{\"error\":\"unconfirmed\",\"stage\":\"private_credential\"}";
+    case PLAYLIST_ADMIN_BINDING: return "{\"error\":\"unconfirmed\",\"stage\":\"binding\"}";
+    case PLAYLIST_ADMIN_CAPABILITIES: return "{\"error\":\"unconfirmed\",\"stage\":\"capabilities\"}";
+    case PLAYLIST_ADMIN_ALLOCATION: return "{\"error\":\"unconfirmed\",\"stage\":\"allocation\"}";
+    case PLAYLIST_ADMIN_EXCHANGE: return "{\"error\":\"unconfirmed\",\"stage\":\"exchange\"}";
+    case PLAYLIST_ADMIN_REMOTE_STATUS: return "{\"error\":\"unconfirmed\",\"stage\":\"bridge_status\"}";
+    case PLAYLIST_ADMIN_RESPONSE: return "{\"error\":\"unconfirmed\",\"stage\":\"response\"}";
+    case PLAYLIST_ADMIN_TIMEOUT: return "{\"error\":\"unconfirmed\",\"stage\":\"timeout\"}";
+    default: return "{\"error\":\"unconfirmed\"}";
+    }
+}
 static esp_err_t playlist_handler(httpd_req_t *req) {
     bool write=req->method==HTTP_PUT;
     if(!admin_http_authorize(req,write))return ESP_OK;
@@ -460,7 +474,7 @@ static esp_err_t playlist_handler(httpd_req_t *req) {
     if(status==401)return reply(req,"503 Service Unavailable","{\"error\":\"bridge_credential\"}");
     if(status==422)return reply(req,"422 Unprocessable Entity","{\"error\":\"invalid\"}");
     if(status==413)return reply(req,"413 Content Too Large","{\"error\":\"too_large\"}");
-    return reply(req,"503 Service Unavailable","{\"error\":\"unconfirmed\"}");
+    return reply(req,"503 Service Unavailable",playlist_failure_body(status));
 }
 
 /* Copy only while the bridge lock is held; JSON allocation and persistence run

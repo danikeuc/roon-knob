@@ -147,15 +147,27 @@ static char *allocate(size_t n){
 #endif
 }
 static void perform(job_t *j) {
- j->status=503;
+  j->status=PLAYLIST_ADMIN_CREDENTIAL;
 #ifndef PLAYLIST_HOST_TEST
  if(!playlist_private_load(j->endpoint.base,j->endpoint.token,sizeof j->endpoint.token))goto error;
 #endif
+  j->status=PLAYLIST_ADMIN_BINDING;
  if(!valid(j))goto error;
  if(j->kind==JOB_RECEIPT){char body[2049],path[128];size_t len=0;int status=0;snprintf(path,sizeof path,"/dial/v1/requests/%s",j->request_id);int rc=exchange(j,"GET",path,NULL,body,2048,&len);if(rc==200&&playlist_receipt_parse(body,len,j->request_id,j->endpoint.zone,&status)){publish(j,(playlist_client_status_t)status,NULL);return;}publish(j,PLAYLIST_CLIENT_UNKNOWN,NULL);return;}
- if(!capabilities(j))goto error;
+  j->status=PLAYLIST_ADMIN_CAPABILITIES;
+  if(!capabilities(j))goto error;
  if(j->kind==JOB_FAVORITES){char *body=allocate(PLAYLIST_FAVORITES_MAX+1);size_t length=0;playlist_favorites_t f;bool ok=body&&exchange(j,"GET","/dial/v1/favorites",NULL,body,PLAYLIST_FAVORITES_MAX,&length)==200&&valid(j)&&playlist_favorites_parse(body,length,&f)&&!strcmp(f.zone_id,j->endpoint.zone);free(body);if(ok){publish(j,PLAYLIST_CLIENT_FAVORITES,&f);return;}goto error;}
- if(j->kind==JOB_ADMIN){j->reply=allocate(j->capacity+1);if(!j->reply)goto error;int rc=exchange(j,j->method,j->path,j->body,j->reply,j->capacity,&j->length);j->status=rc>0?rc:503;if(!valid(j))j->status=503;if(j->status==200){bool catalog=strstr(j->path,"playlists")!=NULL;playlist_favorites_t f;if(!(catalog?playlist_catalog_valid(j->reply,j->length):(playlist_favorites_parse(j->reply,j->length,&f)&&!strcmp(f.zone_id,j->endpoint.zone))))j->status=503;}return;}
+  if(j->kind==JOB_ADMIN){
+   j->status=PLAYLIST_ADMIN_ALLOCATION;j->reply=allocate(j->capacity+1);if(!j->reply)goto error;
+   j->status=PLAYLIST_ADMIN_EXCHANGE;
+   int rc=exchange(j,j->method,j->path,j->body,j->reply,j->capacity,&j->length);
+   j->status=rc==200||rc==401||rc==409||rc==413||rc==422?rc:
+    (rc>0?PLAYLIST_ADMIN_REMOTE_STATUS:PLAYLIST_ADMIN_EXCHANGE);
+   if(!valid(j))j->status=PLAYLIST_ADMIN_BINDING;
+   if(j->status==200){bool catalog=strstr(j->path,"playlists")!=NULL;playlist_favorites_t f;
+    if(!(catalog?playlist_catalog_valid(j->reply,j->length):(playlist_favorites_parse(j->reply,j->length,&f)&&!strcmp(f.zone_id,j->endpoint.zone))))j->status=PLAYLIST_ADMIN_RESPONSE;}
+   return;
+  }
  if(j->kind==JOB_PLAY){char response[2049];size_t len=0;uint64_t expires;
   cJSON *body=cJSON_CreateObject();if(!body)goto error;cJSON_AddStringToObject(body,"favorite_id",j->favorite_id);cJSON_AddNumberToObject(body,"expected_revision",(double)j->revision);cJSON_AddNumberToObject(body,"core_epoch",(double)j->core_epoch);char *text=cJSON_PrintUnformatted(body);cJSON_Delete(body);if(!text)goto error;
   int rc=exchange(j,"POST","/dial/v1/play-intents",text,response,2048,&len);free(text);
@@ -245,18 +257,23 @@ void playlist_client_test_run(void){job_t *j=queued;if(!j)return;queued=NULL;per
 int playlist_client_admin(const char *method,const char *path,const char *body,size_t cap,char **out,size_t *length){
  if(!out||!length||!method||!path||strlen(path)>=256||strlen(method)>=5||cap>PLAYLIST_CATALOG_MAX)return 422;
  *out=NULL;*length=0;
- job_t *j=new_job(JOB_ADMIN,ADMIN_MS);if(!j)return 503;strcpy(j->method,method);strcpy(j->path,path);j->capacity=cap;
- if(body){size_t n=strlen(body);j->body=malloc(n+1);if(!j->body){atomic_flag_clear(&admission);release(j);return 503;}memcpy(j->body,body,n+1);}
+  job_t *j=new_job(JOB_ADMIN,ADMIN_MS);if(!j)return PLAYLIST_ADMIN_ADMISSION;strcpy(j->method,method);strcpy(j->path,path);j->capacity=cap;
+  if(body){size_t n=strlen(body);j->body=malloc(n+1);if(!j->body){atomic_flag_clear(&admission);release(j);return PLAYLIST_ADMIN_ALLOCATION;}memcpy(j->body,body,n+1);}
  atomic_store(&j->references,2);
 #ifdef PLAYLIST_HOST_TEST
  perform(j);atomic_flag_clear(&admission);bool complete=true;
 #else
- j->done=xSemaphoreCreateBinary();if(!j->done){atomic_flag_clear(&admission);release(j);release(j);return 503;}
- if(!enqueue(j)){release(j);return 503;}
+  j->done=xSemaphoreCreateBinary();if(!j->done){atomic_flag_clear(&admission);release(j);release(j);return PLAYLIST_ADMIN_ALLOCATION;}
+  if(!enqueue(j)){release(j);return PLAYLIST_ADMIN_ADMISSION;}
  uint64_t now=now_ms(),left=now>=j->origin&&now<j->deadline?j->deadline-now:0;
- bool complete=left&&xSemaphoreTake(j->done,pdMS_TO_TICKS(left))==pdTRUE&&valid(j);
+  bool signaled=left&&xSemaphoreTake(j->done,pdMS_TO_TICKS(left))==pdTRUE;
+  bool complete=signaled&&valid(j);
 #endif
- int status=complete?j->status:503;
+#ifdef PLAYLIST_HOST_TEST
+  int status=j->status;
+#else
+  int status=complete?j->status:(signaled?PLAYLIST_ADMIN_BINDING:PLAYLIST_ADMIN_TIMEOUT);
+#endif
  if(status==200){*out=j->reply;*length=j->length;j->reply=NULL;}
  if(!complete)atomic_store(&j->cancelled,true);
 #ifdef PLAYLIST_HOST_TEST

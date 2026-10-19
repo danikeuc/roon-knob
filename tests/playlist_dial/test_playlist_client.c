@@ -1,13 +1,15 @@
 #include "playlist_client_dial.h"
+#include "playlist_admin_dial.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-static uint64_t now;static int prepare,play,receipts;static bool timeout,old,expire,zone_change;
+static uint64_t now;static int prepare,play,receipts;static bool timeout,old,expire,zone_change,deny_catalog;
 static uint64_t clock_ms(void){return now;}
 static bool snapshot(playlist_endpoint_t *out){*out=(playlist_endpoint_t){.generation=1,.session=1};strcpy(out->base,"http://bridge/roon");strcpy(out->zone,"sauna");strcpy(out->token,"synthetic");return true;}
 static int exchange(const playlist_http_request_t *r,int *status,char *out,size_t cap,size_t *len){
  const char *json="{}";*status=200;
  assert(!strcmp(r->token,"synthetic"));
+ if(deny_catalog&&strstr(r->path,"playlists")){*status=403;return 0;}
  if(strstr(r->path,"capabilities"))json=old?"{\"version\":0,\"max_favorites\":5,\"replace_queue\":true}":"{\"version\":1,\"max_favorites\":5,\"replace_queue\":true}";
  else if(strstr(r->path,"favorites"))json="{\"revision\":3,\"core_epoch\":7,\"zone_id\":\"sauna\",\"zone_name\":\"Sauna\",\"favorites\":[{\"id\":\"opaque\",\"title\":\"Test\",\"available\":true,\"reason\":null}]}";
  else if(strstr(r->path,"play-intents")){prepare++;json="{\"intent_id\":\"intent\",\"expires_in_ms\":10000}";if(expire)now+=10000;if(zone_change)playlist_client_cancel();}
@@ -25,6 +27,14 @@ int main(void){
  expire=true;assert(playlist_client_request_play("opaque",3,7));playlist_client_test_run();assert(play==2);playlist_client_take(&r);expire=false;
  zone_change=true;assert(playlist_client_request_play("opaque",3,7));playlist_client_test_run();assert(play==2);zone_change=false;
  old=true;assert(playlist_client_request_favorites());playlist_client_test_run();assert(playlist_client_take(&r)&&r.status==PLAYLIST_CLIENT_ERROR);
+ char *reply=NULL;size_t length=0;
+ assert(playlist_client_admin("GET","/dial/v1/playlists",NULL,1024,&reply,&length)==PLAYLIST_ADMIN_CAPABILITIES);
+ old=false;
+ assert(playlist_client_admin("GET","/dial/v1/playlists",NULL,1024,&reply,&length)==PLAYLIST_ADMIN_RESPONSE);
+ deny_catalog=true;
+ assert(playlist_client_admin("GET","/dial/v1/playlists",NULL,1024,&reply,&length)==PLAYLIST_ADMIN_REMOTE_STATUS);
+ deny_catalog=false;
  playlist_client_connected(false);assert(!playlist_client_request_play("opaque",3,7));
+ assert(playlist_client_admin("GET","/dial/v1/playlists",NULL,1024,&reply,&length)==PLAYLIST_ADMIN_ADMISSION);
  puts("playlist client no-replay/deadline PASS");
 }
