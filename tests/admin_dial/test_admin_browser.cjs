@@ -18,7 +18,7 @@ function embedded(name) {
  let observation={operation:'AUTO_SUPPLY',enabled:true,available:true,eligible:true,reason:'eligible',dates:['2026-10-03','2026-10-04','2026-10-05','2026-10-06','2026-10-07'],minima_c:[5,6,7,8,9],last_successful_check:'2026-10-03T10:00:00+00:00'};
  let weatherPuts=0,weatherLostReply=false,weatherOffline=false,weatherConflict=false;
  let favorites={revision:3,core_epoch:7,zone_id:'roon:sauna',zone_name:'Sauna',favorites:[{id:'old',title:'Existing',available:true,reason:null}]};
- let favoritePuts=0,favoriteLost=false,favoriteConflict=false;
+ let favoritePuts=0,favoriteLost=false,favoriteConflict=false,failFavoriteReads=false;
  let delayFavoriteOnce=false,releaseFavorite,notifyFavorite;const favoriteQueued=new Promise(resolve=>notifyFavorite=resolve);
  let zone='roon:sauna',zonePuts=0,zoneConflict=false;const zones=[{id:'roon:sauna',name:'Sauna'},{id:'roon:living',name:'Living <room>'}];
  const calls=[];
@@ -36,6 +36,7 @@ function embedded(name) {
   }
   else if(op==='favorites'){
    if(!authenticated)return route.fulfill({status:401,body:'{}'});
+   if(request.method()==='GET'&&failFavoriteReads)return route.fulfill({status:503,contentType:'application/json',body:'{"error":"unconfirmed"}'});
    if(request.method()==='PUT'){
     favoritePuts++;assert.equal(request.headers()['x-csrf-token'],'c'.repeat(64));const posted=request.postDataJSON();assert.deepEqual(Object.keys(posted).sort(),['core_epoch','expected_revision','items']);
     if(favoriteConflict)return route.fulfill({status:409,body:'{}'});
@@ -117,6 +118,21 @@ function embedded(name) {
  // The same recovery works before the device has any selected zone.
  zone='';await page.locator('#roon-zone-refresh').click();await page.waitForFunction(()=>!zoneBusy&&currentZone==='');assert.equal(await page.locator('#roon-zone').isEnabled(),true);assert.equal(await page.locator('#playlist-save').isDisabled(),true);
  await page.locator('#roon-zone').selectOption('roon:living');await page.locator('#roon-zone-save').click();await page.waitForFunction(()=>!zoneBusy&&currentZoneLive&&currentZone==='roon:living');assert.equal(favoritePuts,3);
+ // A playlist outage must not invalidate a freshly confirmed zone list or a completed zone change.
+ failFavoriteReads=true;
+ await page.locator('#roon-zone-refresh').click();await page.waitForFunction(()=>!zoneBusy);
+ assert.match(await page.locator('#roon-zone-status').textContent(),/Living <room>/);
+ assert.equal(await page.locator('#roon-zone').isEnabled(),true);
+ assert.equal(await page.locator('#roon-zone option').count(),1);
+ assert.equal(await page.locator('#playlist-browse').isDisabled(),true);
+ zones.unshift({id:'roon:sauna',name:'Sauna'});
+ await page.locator('#roon-zone-refresh').click();await page.waitForFunction(()=>!zoneBusy);
+ await page.locator('#roon-zone').selectOption('roon:sauna');await page.locator('#roon-zone-save').click();await page.waitForFunction(()=>!zoneBusy);
+ assert.equal(zone,'roon:sauna');
+ assert.match(await page.locator('#roon-zone-status').textContent(),/Sauna/);
+ assert.equal(await page.locator('#roon-zone').isEnabled(),true);
+ assert.equal(await page.locator('#playlist-browse').isDisabled(),true);
+ failFavoriteReads=false;
  if(process.env.ADMIN_ZONE_SCREENSHOT)await page.screenshot({path:process.env.ADMIN_ZONE_SCREENSHOT,fullPage:true});
  await page.locator('[data-tab=shower]').click();await page.locator('#weather input[name=enabled]').check();
  await page.locator('#weather button').click();
