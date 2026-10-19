@@ -3,7 +3,6 @@
 #include "weather_admin_dial.h"
 #include "light_admin_dial.h"
 #include "playlist_admin_dial.h"
-#include "playlist_client_dial.h"
 #include "cJSON.h"
 #include "bridge_client.h"
 #include "esp_heap_caps.h"

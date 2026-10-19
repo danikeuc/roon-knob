@@ -1,4 +1,5 @@
 #include "playlist_client_dial.h"
+#include "playlist_admin_dial.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
