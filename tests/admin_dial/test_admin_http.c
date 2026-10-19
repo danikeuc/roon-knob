@@ -601,8 +601,11 @@ static void test_playlist_routes_protected(void) {
   fixture_reset();if(ap)assert(captive_portal_start());else config_server_start();
   assert(route_count<=40);printf("playlist %s routes: %d / 40\n",ap?"AP":"STA",route_count);
   const char *paths[]={"/admin/api/roon/playlists","/admin/api/roon/favorites","/admin/api/light/config","/admin/api/light/status","/admin/api/light/settings","/admin/api/light/history"};
-  for(unsigned i=0;i<6;i++){httpd_req_t r=fixture_request(paths[i],HTTP_GET,NULL);fixture_call(&r);assert(fixture_status(&r)==401);}
+  for(unsigned i=0;i<6;i++){httpd_req_t r=fixture_request(paths[i],HTTP_GET,NULL);fixture_call(&r);assert(fixture_status(&r)==401);if(i<2)assert(!strstr(r.response,"\"stage\""));}
   login();
+   httpd_req_t diagnostic=fixture_request(paths[0],HTTP_GET,NULL);diagnostic.cookie=cookie;fixture_call(&diagnostic);
+   assert(fixture_status(&diagnostic)==503);
+   assert(strstr(diagnostic.response,"\"stage\":\"admission\""));
   const char *light_writes[]={"/admin/api/light/config","/admin/api/light/settings","/admin/api/light/actions"};
   for(unsigned i=0;i<3;i++){httpd_req_t lr=fixture_request(light_writes[i],i==2?HTTP_POST:HTTP_PUT,"{}");lr.cookie=cookie;lr.csrf="bad";fixture_call(&lr);assert(fixture_status(&lr)==403);}
   httpd_req_t r=fixture_request(paths[1],HTTP_PUT,"{}");r.cookie=cookie;r.csrf="bad";fixture_call(&r);assert(fixture_status(&r)==403);

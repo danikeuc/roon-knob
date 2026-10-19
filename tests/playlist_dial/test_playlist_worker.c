@@ -12,8 +12,8 @@ int main(void){
  assert(playlist_private_save("http://bridge/roon","synthetic-private"));
  playlist_client_connected(true);assert(playlist_client_init());
  runtime_http_case(HTTP_WEATHER_STALLED_OPEN);uint64_t began=runtime_wall_ms();char *out=NULL;size_t length=0;
- assert(playlist_admin_get(false,NULL,&out,&length)==503&&runtime_wall_ms()-began<150);
- assert(playlist_admin_get(false,NULL,&out,&length)==503); /* retained admission */
+ assert(playlist_admin_get(false,NULL,&out,&length)==PLAYLIST_ADMIN_TIMEOUT&&runtime_wall_ms()-began<150);
+ assert(playlist_admin_get(false,NULL,&out,&length)==PLAYLIST_ADMIN_ADMISSION); /* retained admission */
  runtime_wait_cleanup(1);assert(atomic_load(&fixture_body_writes)==0);
  runtime_http_case(HTTP_WEATHER_NORMAL);assert(playlist_admin_get(false,NULL,&out,&length)==200);free(out);
  runtime_http_case(HTTP_WEATHER_NORMAL);assert(playlist_client_request_favorites());pause_ms(20);playlist_client_result_t result;assert(playlist_client_take(&result)&&result.status==PLAYLIST_CLIENT_FAVORITES);
